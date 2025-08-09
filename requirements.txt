@@ -1,0 +1,12 @@
+fastapi==0.110.0
+uvicorn[standard]==0.35.0
+pillow==11.0.0
+requests==2.31.0
+html2image==2.0.5
+pytz==2024.1
+python-multipart==0.0.9
+pandas==2.2.2; python_version < "3.13"
+pandas==2.2.3; python_version >= "3.13"
+urllib3==2.2.1
+openpyxl==3.1.2
+python-dotenv==1.0.1
