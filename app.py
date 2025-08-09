@@ -17,8 +17,66 @@ from processor import process_csv_file, extract_color
 import io
 import pandas as pd
 import datetime
+import requests
+from typing import Dict, List, Any
+import json
 
 app = FastAPI(title="Lumen Order Processor")
+
+# Shopify configuration from environment variables
+SHOPIFY_SHOP = os.getenv("SHOPIFY_SHOP", "")  # e.g., "mystore.myshopify.com"
+SHOPIFY_TOKEN = os.getenv("SHOPIFY_TOKEN", "")  # Admin API token
+
+def _shopify_get(path: str, params: dict = None) -> dict:
+    """Helper function to make Shopify API calls with pagination support."""
+    # Try environment variables first, then fall back to SHOPIFY_CONFIG
+    shop = SHOPIFY_SHOP or SHOPIFY_CONFIG.get("store_name")
+    token = SHOPIFY_TOKEN or SHOPIFY_CONFIG.get("access_token")
+    
+    if not shop or not token:
+        raise HTTPException(status_code=400, detail="Shopify configuration missing. Set SHOPIFY_SHOP and SHOPIFY_TOKEN environment variables or configure via /shopify/settings.")
+    
+    # Ensure shop has the right format
+    if shop and not shop.endswith('.myshopify.com'):
+        shop = f"{shop}.myshopify.com"
+    
+    url = f"https://{shop}/admin/api/2024-07{path}"
+    headers = {
+        "X-Shopify-Access-Token": token,
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params or {})
+        response.raise_for_status()
+        
+        # Parse pagination info from Link header
+        next_page_info = None
+        prev_page_info = None
+        
+        if "Link" in response.headers:
+            link_header = response.headers["Link"]
+            # Parse next page info
+            if 'rel="next"' in link_header:
+                next_match = re.search(r'<[^>]*[?&]page_info=([^&>]+)[^>]*>;\s*rel="next"', link_header)
+                if next_match:
+                    next_page_info = next_match.group(1)
+            
+            # Parse previous page info
+            if 'rel="previous"' in link_header:
+                prev_match = re.search(r'<[^>]*[?&]page_info=([^&>]+)[^>]*>;\s*rel="previous"', link_header)
+                if prev_match:
+                    prev_page_info = prev_match.group(1)
+        
+        data = response.json()
+        data["_pagination"] = {
+            "next_page_info": next_page_info,
+            "prev_page_info": prev_page_info
+        }
+        return data
+        
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Shopify API error: {str(e)}")
 
 # In-memory store for attendance records
 ATTENDANCE_RECORDS = {}
@@ -53,6 +111,7 @@ UNIFIED_NAVIGATION_MENU = [
     {"id": "reports", "name": "Reports & Analytics", "icon": "📊", "url": "/attendance/report_page", "active": True},
     {"id": "separator", "type": "separator", "name": "Additional Features"},
     {"id": "team", "name": "Team Management", "icon": "👥", "url": "/team", "active": False, "badge": "Soon"},
+    {"id": "shopify", "name": "Shopify Settings", "icon": "🛒", "url": "/shopify/settings", "active": True},
     {"id": "settings", "name": "System Settings", "icon": "⚙️", "url": "/admin/settings", "active": False, "badge": "Soon"},
     {"id": "users", "name": "User Management", "icon": "👨‍💼", "url": "/admin/users", "active": False, "badge": "Soon"},
     {"id": "security", "name": "Security Settings", "icon": "🔐", "url": "/admin/security", "active": False, "badge": "Soon"},
@@ -77,11 +136,99 @@ DIRECT_MESSAGES = {}  # Format: {"EMP001_EMP002": [messages]}
 USER_STATUS = {}  # Format: {"EMP001": {"status": "online", "last_seen": timestamp}}
 
 # In-memory store for message reactions
-MESSAGE_REACTIONS = {}  # Format: {message_id: {"👍": ["EMP001", "EMP002"], "❤️": ["EMP003"]}}
+MESSAGE_REACTIONS = {}
+
+# -------------------- SHOPIFY INTEGRATION --------------------
+# Shopify store configuration - In production, use environment variables or database
+SHOPIFY_CONFIG = {
+    "store_name": "",  # Will be set via settings page
+    "access_token": "",  # Will be set via settings page
+    "api_version": "2024-01"  # Latest stable API version
+}
+
+# In-memory store for cached Shopify data
+SHOPIFY_CACHE = {
+    "orders": [],
+    "analytics": {},
+    "last_updated": None
+}
 
 def get_timestamp():
     """Returns current UTC timestamp in ISO format."""
     return datetime.datetime.utcnow().isoformat()
+
+# -------------------- SHOPIFY API HELPERS --------------------
+def make_shopify_request(endpoint: str, params: Dict = None) -> Dict:
+    """Make a request to Shopify Admin API."""
+    if not SHOPIFY_CONFIG["store_name"] or not SHOPIFY_CONFIG["access_token"]:
+        raise HTTPException(status_code=400, detail="Shopify store not configured. Please add your store details in settings.")
+    
+    url = f"https://{SHOPIFY_CONFIG['store_name']}.myshopify.com/admin/api/{SHOPIFY_CONFIG['api_version']}/{endpoint}"
+    headers = {
+        "X-Shopify-Access-Token": SHOPIFY_CONFIG["access_token"],
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params or {})
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Shopify API error: {str(e)}")
+
+def fetch_shopify_orders(limit: int = 50, status: str = "any") -> List[Dict]:
+    """Fetch orders from Shopify."""
+    params = {
+        "limit": limit,
+        "status": status,
+        "fields": "id,name,email,created_at,updated_at,total_price,currency,financial_status,fulfillment_status,line_items,customer,shipping_address"
+    }
+    
+    try:
+        data = make_shopify_request("orders.json", params)
+        return data.get("orders", [])
+    except Exception as e:
+        print(f"Error fetching Shopify orders: {e}")
+        return []
+
+def fetch_shopify_analytics() -> Dict:
+    """Fetch analytics data from Shopify."""
+    try:
+        # Get order count for today
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        
+        # Fetch recent orders for analytics
+        recent_orders = fetch_shopify_orders(limit=250)
+        
+        # Calculate analytics
+        total_orders = len(recent_orders)
+        today_orders = [o for o in recent_orders if o["created_at"].startswith(today)]
+        yesterday_orders = [o for o in recent_orders if o["created_at"].startswith(yesterday)]
+        
+        total_revenue = sum(float(o.get("total_price", 0)) for o in recent_orders)
+        today_revenue = sum(float(o.get("total_price", 0)) for o in today_orders)
+        
+        pending_orders = [o for o in recent_orders if o.get("financial_status") == "pending"]
+        fulfilled_orders = [o for o in recent_orders if o.get("fulfillment_status") == "fulfilled"]
+        
+        return {
+            "total_orders": total_orders,
+            "today_orders": len(today_orders),
+            "yesterday_orders": len(yesterday_orders),
+            "total_revenue": round(total_revenue, 2),
+            "today_revenue": round(today_revenue, 2),
+            "pending_orders": len(pending_orders),
+            "fulfilled_orders": len(fulfilled_orders),
+            "currency": recent_orders[0].get("currency", "USD") if recent_orders else "USD",
+            "last_updated": get_timestamp()
+        }
+    except Exception as e:
+        print(f"Error fetching Shopify analytics: {e}")
+        return {
+            "error": str(e),
+            "last_updated": get_timestamp()
+        }
 
 def calculate_duration(start_time_str: str, end_time_str: str) -> float:
     """Calculates duration in hours between two ISO formatted timestamps."""
@@ -386,7 +533,7 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
                 <div id="userInfo" class="flex items-center gap-2 mt-1">
         <span class="text-xs text-white/60">Admin Access</span>
         <span class="role-badge admin">Full Access</span>
-  </div>
+      </div>
     </div>
     <button id="sidebarToggle" class="p-2 hover:bg-white/10 rounded-lg">
       <span class="text-lg">⟨</span>
@@ -578,6 +725,7 @@ def eraya_hub_home():
         <div class="glass p-5 text-center">
           <div class="text-3xl font-bold text-blue-400" id="ordersToday">-</div>
           <p class="text-white/70 text-sm">Orders Today</p>
+          <div id="shopifyStatus" class="mt-1 text-xs text-white/50">📊 Shopify</div>
         </div>
         <div class="glass p-5 text-center">
           <div class="text-3xl font-bold text-green-400" id="activeEmployees">-</div>
@@ -590,6 +738,22 @@ def eraya_hub_home():
         <div class="glass p-5 text-center">
           <div class="text-3xl font-bold text-purple-400" id="ordersWeek">-</div>
           <p class="text-white/70 text-sm">Orders This Week</p>
+        </div>
+      </div>
+      
+      <!-- Revenue Cards (Shopify Integration) -->
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5 mt-6" id="revenueCards">
+        <div class="glass p-5 text-center">
+          <div class="text-2xl font-bold text-emerald-400" id="todayRevenue">-</div>
+          <p class="text-white/70 text-sm">Today's Revenue</p>
+        </div>
+        <div class="glass p-5 text-center">
+          <div class="text-2xl font-bold text-teal-400" id="totalRevenue">-</div>
+          <p class="text-white/70 text-sm">Total Revenue</p>
+        </div>
+        <div class="glass p-5 text-center">
+          <div class="text-2xl font-bold text-cyan-400" id="fulfilledOrders">-</div>
+          <p class="text-white/70 text-sm">Fulfilled Orders</p>
         </div>
       </div>
     </section>
@@ -823,6 +987,22 @@ def eraya_hub_home():
           document.getElementById('activeEmployees').textContent = stats.active_employees;
           document.getElementById('pendingOrders').textContent = stats.pending_orders;
           document.getElementById('ordersWeek').textContent = stats.total_orders_week;
+          
+          // Update Shopify revenue data
+          const currency = stats.currency || 'USD';
+          document.getElementById('todayRevenue').textContent = `${currency} ${stats.today_revenue || 0}`;
+          document.getElementById('totalRevenue').textContent = `${currency} ${stats.total_revenue || 0}`;
+          document.getElementById('fulfilledOrders').textContent = stats.fulfilled_orders || 0;
+          
+          // Update Shopify connection status
+          const shopifyStatusEl = document.getElementById('shopifyStatus');
+          if (stats.shopify_configured) {
+            shopifyStatusEl.textContent = '🛒 Connected';
+            shopifyStatusEl.className = 'mt-1 text-xs text-green-400';
+          } else {
+            shopifyStatusEl.innerHTML = '⚠️ <a href="/shopify/settings" class="text-yellow-400 hover:text-yellow-300">Setup Required</a>';
+            shopifyStatusEl.className = 'mt-1 text-xs text-yellow-400';
+          }
           
           // Update attendance status
           const attendanceStatusEl = document.getElementById('attendanceStatus');
@@ -1060,58 +1240,609 @@ def eraya_hub_home():
 
 @app.get("/orders")
 def eraya_orders_page():
-    # For now, provide a simple placeholder that works with sidebar
-    # The full Order Organizer functionality is available at /static/index.html if needed
     body = """
     <section class="glass p-6">
-      <h1 class="text-3xl font-bold">Order Organizer</h1>
-      <p class="text-white/80 mt-2 mb-6">CSV → Organized Images & Reports. Upload your Shopify CSV to download photos, make polaroids/back messages, and export per-product folders + CSVs.</p>
+      <h1 class="text-3xl font-bold">Order Management</h1>
+      <p class="text-white/80 mt-2">Fetch and manage orders directly from your Shopify store.</p>
       
-      <div class="bg-yellow-500/20 border border-yellow-500/30 rounded-xl p-4 mb-6">
+      <!-- Shopify Setup Notice -->
+      <div id="shopifyNotice" class="bg-blue-500/20 border border-blue-500/30 rounded-xl p-4 mt-4" style="display: none;">
         <div class="flex items-center gap-3">
-          <div class="text-2xl">⚠️</div>
+          <div class="text-2xl">ℹ️</div>
           <div>
-            <div class="font-semibold text-yellow-200">Full Order Organizer Available</div>
-            <div class="text-yellow-300/80">The complete Order Organizer with all CSV processing features is available at:</div>
-            <a href="/static/index.html" target="_blank" class="btn btn-primary mt-2 inline-block">
-              🚀 Open Full Order Organizer
-            </a>
+            <div class="font-semibold text-blue-200">Shopify Setup Required</div>
+            <div class="text-blue-300/80">Set environment variables: SHOPIFY_SHOP and SHOPIFY_TOKEN</div>
+            <div class="text-xs text-blue-400 mt-1">
+              Example: <code>set SHOPIFY_SHOP=your-store.myshopify.com</code> and <code>set SHOPIFY_TOKEN=your-token</code>
+            </div>
           </div>
         </div>
       </div>
-      
-      <div class="grid md:grid-cols-2 gap-6">
+
+      <div class="mt-6 grid gap-6">
         <div class="glass p-5">
-          <h3 class="text-xl font-semibold mb-3">📊 Quick Stats</h3>
-          <div class="space-y-2 text-white/80">
-            <div>• CSV Processing: Available</div>
-            <div>• Image Downloads: Available</div>
-            <div>• Polaroid Generation: Available</div>
-            <div>• Batch Export: Available</div>
+          <div class="flex flex-wrap items-center gap-3">
+            <button type="button" id="fetchOrders" class="btn btn-primary">Fetch from Shopify</button>
+            <button type="button" id="exportOrders" class="btn btn-secondary">Export CSV (filtered)</button>
+            <button type="button" id="exportSelected" class="btn btn-accent" disabled>Export Selected (<span id="selectedCount">0</span>)</button>
+            <button type="button" id="downloadPhotos" class="btn btn-accent" disabled>Download Photos (<span id="selectedPhotos">0</span>)</button>
+            <div id="status" class="text-white/70">🔄 Auto-fetching ALL orders...</div>
           </div>
+          <div class="flex flex-wrap items-center gap-3 mt-2">
+            <button type="button" id="selectAll" class="btn btn-sm btn-secondary">Select All</button>
+            <button type="button" id="selectNone" class="btn btn-sm btn-secondary">Select None</button>
+            <button type="button" id="selectFiltered" class="btn btn-sm btn-secondary">Select Filtered</button>
+            <div class="text-white/60 text-sm" id="selectionInfo">No items selected</div>
+          </div>
+          <div class="flex flex-wrap gap-3 mt-3">
+            <input id="qOrder" placeholder="Search Order #" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm"/>
+            <input id="qProd" placeholder="Search Product" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm"/>
+            <input id="qVar" placeholder="Search Variant" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm"/>
+            <select id="qStatus" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm">
+              <option value="any">All Orders</option>
+              <option value="open">Open</option>
+              <option value="closed">Closed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+            <select id="pageSize" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm">
+              <option value="25">25 / page</option>
+              <option value="50">50 / page</option>
+              <option value="100">100 / page</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="glass p-0 overflow-auto" style="max-height:70vh">
+          <table class="min-w-full text-sm" id="tbl">
+            <thead class="sticky top-0 bg-slate-900/80 backdrop-blur" id="head"></thead>
+            <tbody id="body"></tbody>
+          </table>
         </div>
         
-        <div class="glass p-5">
-          <h3 class="text-xl font-semibold mb-3">🔧 Features</h3>
-          <div class="space-y-2 text-white/80">
-            <div>• Drag & Drop CSV Upload</div>
-            <div>• Real-time Progress Tracking</div>
-            <div>• Customizable Settings</div>
-            <div>• ZIP Download Results</div>
-          </div>
+        <div class="flex items-center gap-3">
+          <button id="prev" class="btn btn-secondary">Prev</button>
+          <div id="pageinfo" class="text-white/70 text-sm"></div>
+          <button id="next" class="btn btn-secondary">Next</button>
+          <button id="loadMore" class="btn btn-primary" style="display: none;">Load More</button>
         </div>
       </div>
-      
-      <div class="mt-8 text-center">
-        <p class="text-white/60 mb-4">Integration with sidebar coming soon. For now, use the link above for full functionality.</p>
-        <div class="flex gap-3 justify-center">
-          <a href="/hub" class="btn btn-secondary">← Back to Dashboard</a>
-          <a href="/static/index.html" target="_blank" class="btn btn-primary">Open Full Version →</a>
+
+      <!-- Simple lightbox -->
+      <div id="lb" class="fixed inset-0 hidden items-center justify-center bg-black/70 p-6">
+        <div class="bg-slate-900/90 border border-white/10 rounded-2xl p-4 max-w-5xl w-full">
+          <div class="flex justify-between items-center mb-3">
+            <div class="text-lg font-semibold">Polaroids</div>
+            <button id="lbClose" class="btn btn-secondary">Close</button>
+          </div>
+          <div id="lbBody" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
         </div>
       </div>
     </section>
+
+    <style>
+      #body tr:nth-child(even){ background: rgba(255,255,255,0.03); }
+      .badge-miss{ background:#ef4444; color:white; padding:2px 6px; border-radius:6px; font-size:12px; }
+      #tbl tbody tr:hover { background-color: rgba(255,255,255,0.05); }
+      #tbl th, #tbl td { padding: 0.75rem 0.5rem; text-align: left; vertical-align: top; }
+      #tbl thead th { background-color: #0f172a; }
+      
+      /* Column Widths - adjusted for checkbox */
+      #tbl th:nth-child(1), #tbl td:nth-child(1) { width: 4%; /* Checkbox */ }
+      #tbl th:nth-child(2), #tbl td:nth-child(2) { width: 10%; /* Order Number */ }
+      #tbl th:nth-child(3), #tbl td:nth-child(3) { width: 15%; /* Product Name */ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 0; }
+      #tbl th:nth-child(4), #tbl td:nth-child(4) { width: 10%; /* Variant */ }
+      #tbl th:nth-child(5), #tbl td:nth-child(5) { width: 5%; /* Color */ }
+      #tbl th:nth-child(6), #tbl td:nth-child(6) { width: 10%; /* Main Photo */ }
+      #tbl th:nth-child(7), #tbl td:nth-child(7) { width: 10%; /* Polaroids */ }
+      #tbl th:nth-child(8), #tbl td:nth-child(8) { width: 10%; /* Back Engraving Type */ }
+      #tbl th:nth-child(9), #tbl td:nth-child(9) { width: 15%; /* Back Engraving Value */ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 0; }
+      #tbl th:nth-child(10), #tbl td:nth-child(10) { width: 6%; /* Main Photo Status */ }
+      #tbl th:nth-child(11), #tbl td:nth-child(11) { width: 5%; /* Polaroid Count */ }
+      
+      .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .table-img { max-height: 80px; width: auto; }
+      .btn-accent { background: linear-gradient(135deg, #8b5cf6, #a855f7); color: white; }
+      .btn-accent:hover { background: linear-gradient(135deg, #7c3aed, #9333ea); }
+      .btn-accent:disabled { opacity: 0.5; cursor: not-allowed; background: #6b7280; }
+      .btn-sm { padding: 0.375rem 0.75rem; font-size: 0.875rem; }
+      tr.selected { background-color: rgba(139, 92, 246, 0.2) !important; }
+      .row-checkbox { transform: scale(1.2); }
+    </style>
+
+    <script>
+      // elements
+      var fetchBtn=document.getElementById('fetchOrders'), exportBtn=document.getElementById('exportOrders'), status=document.getElementById('status');
+      var exportSelectedBtn=document.getElementById('exportSelected'), downloadPhotosBtn=document.getElementById('downloadPhotos');
+      var selectAllBtn=document.getElementById('selectAll'), selectNoneBtn=document.getElementById('selectNone'), selectFilteredBtn=document.getElementById('selectFiltered');
+      var qOrder=document.getElementById('qOrder'), qProd=document.getElementById('qProd'), qVar=document.getElementById('qVar');
+      var head=document.getElementById('head'), body=document.getElementById('body'), pageSizeEl=document.getElementById('pageSize');
+      var prev=document.getElementById('prev'), next=document.getElementById('next'), pageinfo=document.getElementById('pageinfo');
+      var loadMoreBtn=document.getElementById('loadMore');
+      var lb=document.getElementById('lb'), lbBody=document.getElementById('lbBody'), lbClose=document.getElementById('lbClose');
+      var qStatus=document.getElementById('qStatus');
+
+      // state
+      var rows=[], filt=[], page=1, sortBy=null, sortDir=1, nextPageInfo=null;
+      var selectedRows = new Set(); // Track selected row indices
+
+      function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m];});}
+      function td(h){return '<td class="border-t border-white/10 align-top">'+h+'</td>';}
+
+      function imgFallback(el){el.onerror=null; el.src='https://via.placeholder.com/80?text=No+Img';}
+
+      function openLB(urls){
+        lbBody.innerHTML='';
+        for(var i=0;i<urls.length;i++){
+          var im=document.createElement('img'); im.loading='lazy'; im.src=urls[i];
+          im.className='w-full h-40 object-cover rounded-xl border border-white/10';
+          im.onerror=function(){ this.src='https://via.placeholder.com/160x160?text=No+Img'; };
+          lbBody.appendChild(im);
+        }
+        lb.classList.remove('hidden'); lb.classList.add('flex');
+      }
+      lbClose.onclick=function(){lb.classList.add('hidden'); lb.classList.remove('flex');};
+      lb.onclick=function(e){ if(e.target===lb) lbClose.onclick(); };
+
+      function convertShopifyOrdersToRows(orders) {
+        var converted = [];
+        for(var i=0; i<orders.length; i++) {
+          var order = orders[i];
+          var lineItems = order.line_items || [];
+          
+          for(var j=0; j<lineItems.length; j++) {
+            var item = lineItems[j];
+            var properties = {};
+            
+            // Parse line item properties
+            if(item.properties && Array.isArray(item.properties)) {
+              for(var k=0; k<item.properties.length; k++) {
+                var prop = item.properties[k];
+                if(prop.name && prop.value) {
+                  properties[prop.name.toLowerCase()] = prop.value;
+                }
+              }
+            }
+            
+            // Extract data according to mapping rules
+            var mainPhoto = properties['photo'] || properties['photo link'] || '';
+            var polaroidStr = properties['polaroid'] || properties['your polaroid image'] || '';
+            var polaroids = polaroidStr ? polaroidStr.split(/[,\\s]+/).map(function(s){return s.trim();}).filter(function(s){return s;}) : [];
+            var backValue = properties['back message'] || properties['back engraving'] || '';
+            
+            var row = {
+              'Order Number': order.name || ('#' + (order.order_number || order.id)),
+              'Product Name': item.name || '',
+              'Variant': item.variant_title || '',
+              'Color': '', // Leave empty as requested
+              'Main Photo': mainPhoto,
+              'Polaroids': polaroids,
+              'Back Engraving Type': backValue ? 'Back Message' : '',
+              'Back Engraving Value': backValue,
+              'Main Photo Status': mainPhoto ? 'Success' : '',
+              'Polaroid Count': polaroids.length.toString()
+            };
+            
+            converted.push(row);
+          }
+        }
+        return converted;
+      }
+
+      function buildHead(){
+        var cols=['Order Number','Product Name','Variant','Color','Main Photo','Polaroids','Back Engraving Type','Back Engraving Value','Main Photo Status','Polaroid Count'];
+        var h='<tr>';
+        
+        // Add checkbox column header
+        h+='<th class="text-left p-2 border-b border-white/10"><input type="checkbox" id="selectAllCheckbox" class="row-checkbox" title="Select All Visible"></th>';
+        
+        for(var i=0;i<cols.length;i++){
+          var c=cols[i]; var arrow=(sortBy===c?(sortDir>0?' ▲':' ▼'):'');
+          h+='<th class="text-left p-2 border-b border-white/10 cursor-pointer" data-col="'+esc(c)+'">'+esc(c)+arrow+'</th>';
+        }
+        h+='</tr>';
+        head.innerHTML=h;
+        
+        // Add event listeners for sorting
+        var ths=head.querySelectorAll('th[data-col]');
+        for(var k=0;k<ths.length;k++){
+          ths[k].onclick=function(){
+            var c=this.getAttribute('data-col');
+            if(sortBy===c) sortDir=-sortDir; else {sortBy=c; sortDir=1;}
+            applyFilters();
+          };
+        }
+        
+        // Add event listener for select all checkbox
+        document.getElementById('selectAllCheckbox').onchange = function() {
+          if (this.checked) {
+            selectAllVisible();
+          } else {
+            selectNoneVisible();
+          }
+        };
+      }
+
+      function applyFilters(){
+        var o=qOrder.value.trim().toLowerCase(), p=qProd.value.trim().toLowerCase(), v=qVar.value.trim().toLowerCase();
+        filt=rows.filter(function(r){
+          var ok=true;
+          if(o) ok = ok && String(r['Order Number']||'').toLowerCase().indexOf(o)>=0;
+          if(p) ok = ok && String(r['Product Name']||'').toLowerCase().indexOf(p)>=0;
+          if(v) ok = ok && String(r['Variant']||'').toLowerCase().indexOf(v)>=0;
+          return ok;
+        });
+        if(sortBy){
+          filt.sort(function(a,b){
+            var av=String(a[sortBy]||'').toLowerCase(), bv=String(b[sortBy]||'').toLowerCase();
+            if(av<bv) return -1*sortDir; if(av>bv) return 1*sortDir; return 0;
+          });
+        }
+        page=1; render();
+      }
+
+      function render(){
+        var per=parseInt(pageSizeEl.value,10)||25;
+        var start=(page-1)*per, end=Math.min(start+per, filt.length);
+        var out='';
+        for(var i=start;i<end;i++){
+          var r=filt[i];
+          var globalIdx = rows.indexOf(r); // Get global index for selection tracking
+          var isSelected = selectedRows.has(globalIdx);
+          
+          var main=r['Main Photo'] ? '<img loading="lazy" src="'+esc(r['Main Photo'])+'" class="w-20 h-20 object-cover rounded-lg border border-white/10 table-img" onerror="imgFallback(this)">' : '<span class="badge-miss">Missing photo</span>';
+          var polys=r['Polaroids']||[]; var thumbs='';
+          for(var t=0; t<Math.min(3,polys.length); t++){
+            thumbs+='<img loading="lazy" src="'+esc(polys[t])+'" class="w-14 h-14 object-cover rounded-md border border-white/10 table-img" onerror="imgFallback(this)" style="margin-right:4px">';
+          }
+          var more=polys.length>3?('<div class="text-xs text-white/60">+'+(polys.length-3)+' more</div>'):'';
+          var gallery='<a href="#" class="gal" data-idx="'+i+'"><div class="flex gap-2 flex-wrap">'+thumbs+more+'</div></a>';
+          var engr=String(r['Back Engraving Value']||'').trim()?('<div class="truncate" style="white-space:pre-wrap">'+esc(r['Back Engraving Value'])+'</div>'):'<span class="badge-miss">Missing</span>';
+
+          out+='<tr class="'+(isSelected?'selected':'')+'" data-global-idx="'+globalIdx+'">'+
+            td('<input type="checkbox" class="row-checkbox" data-idx="'+globalIdx+'" '+(isSelected?'checked':'')+'>')+
+            td(esc(r['Order Number']))+td(esc(r['Product Name']))+td(esc(r['Variant']))+td(esc(r['Color']))+
+            td(main)+td(gallery)+td(esc(r['Back Engraving Type']))+td(engr)+td(esc(r['Main Photo Status']))+td(esc(r['Polaroid Count']))+
+          '</tr>';
+        }
+        body.innerHTML=out;
+
+        // Add event listeners for gallery links
+        var links=body.querySelectorAll('a.gal');
+        for(var g=0; g<links.length; g++){
+          links[g].onclick=function(e){
+            e.preventDefault();
+            var idx=parseInt(this.getAttribute('data-idx')||'-1',10);
+            if(idx>=0 && idx<filt.length){
+              var urls=filt[idx]['Polaroids']||[];
+              if(urls.length) openLB(urls);
+            }
+          };
+        }
+        
+        // Add event listeners for checkboxes
+        var checkboxes = body.querySelectorAll('.row-checkbox');
+        for(var c=0; c<checkboxes.length; c++){
+          checkboxes[c].onchange = function(){
+            var idx = parseInt(this.getAttribute('data-idx'));
+            var row = this.closest('tr');
+            if(this.checked) {
+              selectedRows.add(idx);
+              row.classList.add('selected');
+            } else {
+              selectedRows.delete(idx);
+              row.classList.remove('selected');
+            }
+            updateSelectionUI();
+          };
+        }
+
+        var total=filt.length, pages=Math.max(1, Math.ceil(total/per));
+        pageinfo.textContent='Page '+page+' / '+pages+' — '+total+' rows';
+        prev.disabled=page<=1; next.disabled=page>=pages;
+        
+        // Hide load more button since we auto-load everything
+        loadMoreBtn.style.display = 'none';
+        
+        // Update selection UI
+        updateSelectionUI();
+      }
+
+      prev.onclick=function(){ if(page>1){ page--; render(); } };
+      next.onclick=function(){ var per=parseInt(pageSizeEl.value,10)||25; var pages=Math.max(1,Math.ceil(filt.length/per)); if(page<pages){ page++; render(); } };
+      pageSizeEl.onchange=applyFilters;
+      qOrder.oninput=qProd.oninput=qVar.oninput=applyFilters;
+
+      window.imgFallback = imgFallback; // make global for onerror attr
+      
+      // Selection functions
+      function updateSelectionUI() {
+        var selectedCount = selectedRows.size;
+        var selectedWithPhotos = 0;
+        
+        selectedRows.forEach(function(idx) {
+          if (rows[idx] && rows[idx]['Main Photo']) {
+            selectedWithPhotos++;
+          }
+        });
+        
+        document.getElementById('selectedCount').textContent = selectedCount;
+        document.getElementById('selectedPhotos').textContent = selectedWithPhotos;
+        
+        exportSelectedBtn.disabled = selectedCount === 0;
+        downloadPhotosBtn.disabled = selectedWithPhotos === 0;
+        
+        document.getElementById('selectionInfo').textContent = 
+          selectedCount === 0 ? 'No items selected' : 
+          selectedCount + ' items selected (' + selectedWithPhotos + ' with photos)';
+      }
+      
+      function selectAllVisible() {
+        var per=parseInt(pageSizeEl.value,10)||25;
+        var start=(page-1)*per, end=Math.min(start+per, filt.length);
+        for(var i=start; i<end; i++) {
+          var globalIdx = rows.indexOf(filt[i]);
+          selectedRows.add(globalIdx);
+        }
+        render();
+      }
+      
+      function selectNoneVisible() {
+        var per=parseInt(pageSizeEl.value,10)||25;
+        var start=(page-1)*per, end=Math.min(start+per, filt.length);
+        for(var i=start; i<end; i++) {
+          var globalIdx = rows.indexOf(filt[i]);
+          selectedRows.delete(globalIdx);
+        }
+        render();
+      }
+      
+      function selectAll() {
+        selectedRows.clear();
+        for(var i=0; i<rows.length; i++) {
+          selectedRows.add(i);
+        }
+        render();
+      }
+      
+      function selectNone() {
+        selectedRows.clear();
+        render();
+      }
+      
+      function selectFiltered() {
+        selectedRows.clear();
+        for(var i=0; i<filt.length; i++) {
+          var globalIdx = rows.indexOf(filt[i]);
+          selectedRows.add(globalIdx);
+        }
+        render();
+      }
+
+      function fetchOrdersFromShopify() {
+        status.textContent='🔄 Fetching ALL orders from Shopify...'; 
+        head.innerHTML=''; 
+        body.innerHTML='';
+        fetchBtn.disabled = true;
+        fetchBtn.textContent = '🔄 Fetching All Orders...';
+        rows = []; // Reset rows
+        
+        // Fetch all orders recursively
+        fetchAllOrdersRecursively(null, 0);
+      }
+      
+      function fetchAllOrdersRecursively(pageInfo, totalFetched) {
+        var selectedStatus = qStatus.value;
+        var url = '/api/shopify/orders?status='+encodeURIComponent(selectedStatus)+'&limit=250'; // Max limit
+        if (pageInfo) {
+          url += '&page_info='+encodeURIComponent(pageInfo);
+        }
+        
+        fetch(url)
+          .then(function(res){ 
+            return res.text().then(function(t){ 
+              return {ok:res.ok, status:res.status, text:t};
+            }); 
+          })
+          .then(function(x){
+            if(!x.ok){ 
+              var errorMsg = 'Error: ';
+              try {
+                var errorData = JSON.parse(x.text);
+                errorMsg += errorData.detail || x.text;
+                
+                // Show setup notice if it's a configuration error
+                if (errorData.detail && (errorData.detail.includes('Shopify configuration missing') || errorData.detail.includes('configure via /shopify/settings'))) {
+                  var notice = document.getElementById('shopifyNotice');
+                  notice.style.display = 'block';
+                  // Add link to Shopify settings
+                  notice.innerHTML = notice.innerHTML.replace('</div></div>', 
+                    '<div class="text-xs text-blue-400 mt-2">' +
+                    '<a href="/shopify/settings" class="text-blue-300 hover:text-blue-200 underline">Or configure via Shopify Settings page →</a>' +
+                    '</div></div></div>');
+                }
+              } catch(e) {
+                errorMsg += x.text || ('HTTP ' + x.status);
+              }
+              status.textContent = errorMsg;
+              fetchBtn.disabled = false;
+              fetchBtn.textContent = 'Fetch from Shopify';
+              return; 
+            }
+            
+            // Hide setup notice on successful fetch
+            document.getElementById('shopifyNotice').style.display = 'none';
+            var data; 
+            try{ 
+              data=JSON.parse(x.text); 
+            } catch(e){ 
+              status.textContent='Bad JSON from server';
+              fetchBtn.disabled = false;
+              fetchBtn.textContent = 'Fetch from Shopify';
+              return; 
+            }
+            
+            var orders = data.orders || [];
+            var newRows = convertShopifyOrdersToRows(orders);
+            rows = rows.concat(newRows);
+            totalFetched += orders.length;
+            
+            // Update status with progress
+            status.textContent='🔄 Fetched '+totalFetched+' orders ('+rows.length+' line items)' + (data.next_page_info ? ' - Loading more...' : ' - Complete!');
+            
+            // Update display with current data
+            if (rows.length > 0) {
+              buildHead(); 
+              applyFilters();
+            }
+            
+            // Continue fetching if there are more pages
+            if (data.next_page_info) {
+              nextPageInfo = data.next_page_info;
+              // Small delay to prevent overwhelming the API
+              setTimeout(function() {
+                fetchAllOrdersRecursively(data.next_page_info, totalFetched);
+              }, 200);
+            } else {
+              // All done!
+              nextPageInfo = null;
+              status.textContent='✅ Loaded ALL '+totalFetched+' orders ('+rows.length+' line items)';
+              fetchBtn.disabled = false;
+              fetchBtn.textContent = 'Fetch from Shopify';
+            }
+          })
+          .catch(function(err){ 
+            console.error('Fetch error:', err); 
+            status.textContent='❌ Network error: ' + err.message;
+            fetchBtn.disabled = false;
+            fetchBtn.textContent = 'Fetch from Shopify';
+          });
+      }
+
+      fetchBtn.onclick = fetchOrdersFromShopify;
+      
+      loadMoreBtn.onclick=function(){
+        if(!nextPageInfo) return;
+        status.textContent='Loading more...';
+        var selectedStatus = qStatus.value;
+        fetch('/api/shopify/orders?status='+encodeURIComponent(selectedStatus)+'&limit=100&page_info='+encodeURIComponent(nextPageInfo))
+          .then(function(res){ return res.text().then(function(t){ return {ok:res.ok, text:t};}); })
+          .then(function(x){
+            if(!x.ok){ status.textContent='Error: '+x.text; return; }
+            var data; try{ data=JSON.parse(x.text); }catch(e){ status.textContent='Bad JSON from server'; return; }
+            var orders = data.orders || [];
+            nextPageInfo = data.next_page_info;
+            var newRows = convertShopifyOrdersToRows(orders);
+            rows = rows.concat(newRows);
+            status.textContent='Loaded '+rows.length+' total line items';
+            applyFilters(); // Refresh display with new data
+          })
+          .catch(function(err){ console.error(err); status.textContent='Unexpected error loading more'; });
+      };
+
+      exportBtn.onclick=function(){
+        var cols=['Order Number','Product Name','Variant','Color','Main Photo','Polaroids','Back Engraving Type','Back Engraving Value','Main Photo Status','Polaroid Count'];
+        var csv=cols.join(',')+'\\n';
+        for(var i=0;i<filt.length;i++){
+          var r=filt[i], line=[];
+          for(var c=0;c<cols.length;c++){
+            var v=r[cols[c]];
+            if(Array.isArray(v)) v=v.join(' ');
+            line.push('"'+String(v==null?'':v).replace(/"/g,'""')+'"');
+          }
+          csv+=line.join(',')+('\\n');
+        }
+        var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'}), a=document.createElement('a');
+        a.href=URL.createObjectURL(blob); a.download='shopify_orders_filtered.csv'; a.click(); URL.revokeObjectURL(a.href);
+      };
+      
+      // Export selected orders
+      exportSelectedBtn.onclick=function(){
+        var selectedData = [];
+        selectedRows.forEach(function(idx) {
+          if (rows[idx]) {
+            selectedData.push(rows[idx]);
+          }
+        });
+        
+        if (selectedData.length === 0) {
+          alert('No orders selected for export');
+          return;
+        }
+        
+        var cols=['Order Number','Product Name','Variant','Color','Main Photo','Polaroids','Back Engraving Type','Back Engraving Value','Main Photo Status','Polaroid Count'];
+        var csv=cols.join(',')+'\\n';
+        for(var i=0;i<selectedData.length;i++){
+          var r=selectedData[i], line=[];
+          for(var c=0;c<cols.length;c++){
+            var v=r[cols[c]];
+            if(Array.isArray(v)) v=v.join(' ');
+            line.push('"'+String(v==null?'':v).replace(/"/g,'""')+'"');
+          }
+          csv+=line.join(',')+('\\n');
+        }
+        var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'}), a=document.createElement('a');
+        a.href=URL.createObjectURL(blob); a.download='shopify_orders_selected.csv'; a.click(); URL.revokeObjectURL(a.href);
+      };
+      
+      // Download photos in bulk
+      downloadPhotosBtn.onclick=function(){
+        var photosToDownload = [];
+        selectedRows.forEach(function(idx) {
+          if (rows[idx] && rows[idx]['Main Photo']) {
+            photosToDownload.push({
+              url: rows[idx]['Main Photo'],
+              filename: 'photo_' + (rows[idx]['Order Number'] || idx).replace(/[^a-zA-Z0-9]/g, '_') + '.jpg'
+            });
+          }
+        });
+        
+        if (photosToDownload.length === 0) {
+          alert('No photos available in selected orders');
+          return;
+        }
+        
+        // Download each photo
+        photosToDownload.forEach(function(photo, index) {
+          setTimeout(function() {
+            var a = document.createElement('a');
+            a.href = photo.url;
+            a.download = photo.filename;
+            a.target = '_blank';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }, index * 100); // Small delay between downloads
+        });
+        
+        status.textContent = '📸 Downloading ' + photosToDownload.length + ' photos...';
+      };
+      
+      // Selection button event listeners
+      selectAllBtn.onclick = selectAll;
+      selectNoneBtn.onclick = selectNone;
+      selectFilteredBtn.onclick = selectFiltered;
+      
+      // Auto-fetch orders when page loads
+      document.addEventListener('DOMContentLoaded', function() {
+        console.log('Page loaded, auto-fetching orders...');
+        setTimeout(function() {
+          fetchOrdersFromShopify();
+        }, 500); // Small delay to ensure everything is initialized
+      });
+      
+      // Also auto-fetch if DOM is already loaded
+      if (document.readyState === 'loading') {
+        // DOMContentLoaded listener above will handle this
+      } else {
+        // DOM is already loaded
+        console.log('DOM already loaded, auto-fetching orders...');
+        setTimeout(function() {
+          fetchOrdersFromShopify();
+        }, 100);
+      }
+    </script>
     """
-    return _eraya_lumen_page("Order Organizer", body)
+    return _eraya_lumen_page("Order Management", body)
 
 # -------------------- DASHBOARD STATS API --------------------
 @app.get("/api/dashboard/stats")
@@ -1135,16 +1866,50 @@ def get_dashboard_stats():
             active_employees += 1
             employee_names.append(emp_name or emp_id)
     
-    # For now, we'll simulate order counts since we don't have a real order system
-    # In a real system, you'd query your order database
+    # Get Shopify data if configured
+    shopify_data = {}
+    if SHOPIFY_CONFIG["store_name"] and SHOPIFY_CONFIG["access_token"]:
+        try:
+            shopify_analytics = fetch_shopify_analytics()
+            shopify_data = {
+                "total_orders_today": shopify_analytics.get("today_orders", 0),
+                "total_orders_week": shopify_analytics.get("total_orders", 0),
+                "pending_orders": shopify_analytics.get("pending_orders", 0),
+                "total_revenue": shopify_analytics.get("total_revenue", 0),
+                "today_revenue": shopify_analytics.get("today_revenue", 0),
+                "currency": shopify_analytics.get("currency", "USD"),
+                "fulfilled_orders": shopify_analytics.get("fulfilled_orders", 0)
+            }
+        except Exception as e:
+            print(f"Error fetching Shopify data for dashboard: {e}")
+            shopify_data = {
+                "total_orders_today": 0,
+                "total_orders_week": 0,
+                "pending_orders": 0,
+                "total_revenue": 0,
+                "today_revenue": 0,
+                "currency": "USD",
+                "fulfilled_orders": 0
+            }
+    else:
+        # Placeholder data when Shopify not configured
+        shopify_data = {
+            "total_orders_today": 12,  # Placeholder
+            "total_orders_week": 156,  # Placeholder
+            "pending_orders": 23,  # Placeholder
+            "total_revenue": 45678.90,  # Placeholder
+            "today_revenue": 1234.56,  # Placeholder
+            "currency": "USD",
+            "fulfilled_orders": 133
+        }
+
     stats = {
-        "total_orders_today": 0,  # Placeholder - would be calculated from order database
-        "total_orders_week": 0,   # Placeholder - would be calculated from order database
+        **shopify_data,
         "active_employees": active_employees,
         "total_employees": len(EMPLOYEES),
         "active_employee_names": employee_names,
-        "pending_orders": 0,      # Placeholder - would be calculated from order database
-        "recent_activity": []     # Placeholder - would be recent order/attendance activity
+        "shopify_configured": bool(SHOPIFY_CONFIG["store_name"] and SHOPIFY_CONFIG["access_token"]),
+        "recent_activity": []  # Can be enhanced later
     }
     
     return JSONResponse(content=stats)
@@ -1358,6 +2123,97 @@ def send_direct_message(to_employee_id: str = Form(...), from_employee_id: str =
         DIRECT_MESSAGES[dm_key].pop(0)
     
     return JSONResponse(content={"status": "success", "message": "DM sent successfully.", "message_id": message_id})
+
+# -------------------- SHOPIFY API ENDPOINTS --------------------
+
+@app.get("/api/shopify/analytics")
+def get_shopify_analytics():
+    """Get analytics data from Shopify store."""
+    try:
+        analytics = fetch_shopify_analytics()
+        
+        # Cache the analytics
+        SHOPIFY_CACHE["analytics"] = analytics
+        SHOPIFY_CACHE["last_updated"] = get_timestamp()
+        
+        return JSONResponse(content=analytics)
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching analytics: {str(e)}")
+
+@app.post("/api/shopify/config")
+def configure_shopify(store_name: str = Form(...), access_token: str = Form(...)):
+    """Configure Shopify store connection."""
+    try:
+        # Test the connection
+        old_config = SHOPIFY_CONFIG.copy()
+        SHOPIFY_CONFIG["store_name"] = store_name.strip()
+        SHOPIFY_CONFIG["access_token"] = access_token.strip()
+        
+        # Test API call
+        test_data = make_shopify_request("shop.json")
+        shop_info = test_data.get("shop", {})
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": "Shopify store connected successfully!",
+            "shop_name": shop_info.get("name", store_name),
+            "shop_domain": shop_info.get("domain", f"{store_name}.myshopify.com"),
+            "currency": shop_info.get("currency", "USD")
+        })
+    except Exception as e:
+        # Restore old config on error
+        SHOPIFY_CONFIG.update(old_config)
+        raise HTTPException(status_code=400, detail=f"Failed to connect to Shopify: {str(e)}")
+
+@app.get("/api/shopify/config")
+def get_shopify_config():
+    """Get current Shopify configuration status."""
+    return JSONResponse(content={
+        "configured": bool(SHOPIFY_CONFIG["store_name"] and SHOPIFY_CONFIG["access_token"]),
+        "store_name": SHOPIFY_CONFIG["store_name"],
+        "api_version": SHOPIFY_CONFIG["api_version"],
+        "last_updated": SHOPIFY_CACHE.get("last_updated")
+    })
+
+@app.get("/api/shopify/orders")
+def api_shopify_orders(
+    status: str = "any",
+    limit: int = 250,  # Default to maximum for efficiency
+    page_info: str = None,
+    created_at_min: str = None,
+    created_at_max: str = None
+):
+    """Fetch orders from Shopify with pagination support."""
+    try:
+        params = {
+            "limit": min(limit, 250),  # Shopify max is 250
+            "status": status,
+            "fields": "id,name,order_number,created_at,financial_status,fulfillment_status,customer,email,order_status_url,line_items"
+        }
+        
+        # Add optional parameters
+        if page_info:
+            params["page_info"] = page_info
+        if created_at_min:
+            params["created_at_min"] = created_at_min
+        if created_at_max:
+            params["created_at_max"] = created_at_max
+            
+        # Call Shopify API
+        data = _shopify_get("/orders.json", params)
+        
+        return JSONResponse(content={
+            "orders": data.get("orders", []),
+            "next_page_info": data["_pagination"]["next_page_info"],
+            "prev_page_info": data["_pagination"]["prev_page_info"]
+        })
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching Shopify orders: {str(e)}")
 
 # -------------------- USER ROLES & NAVIGATION API --------------------
 @app.get("/api/user/{employee_id}/role")
@@ -1999,6 +2855,232 @@ def eraya_packing_page():
     """
     return _eraya_lumen_page("Packing", body)
 
+# -------------------- SHOPIFY SETTINGS PAGE --------------------
+@app.get("/shopify/settings")
+def shopify_settings_page():
+    body = """
+    <section class="glass p-6">
+      <h1 class="text-3xl font-bold mb-2">🛒 Shopify Integration Settings</h1>
+      <p class="text-white/80 mb-6">Connect your Shopify store to automatically sync orders and analytics with your dashboard.</p>
+      
+      <!-- Connection Status -->
+      <div id="connectionStatus" class="mb-6">
+        <!-- Will be populated by JavaScript -->
+      </div>
+      
+      <!-- Configuration Form -->
+      <div class="glass p-6 mb-6">
+        <h3 class="text-xl font-semibold mb-4">Store Configuration</h3>
+        <form id="shopifyForm" class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-white/90 mb-2">Store Name</label>
+            <input type="text" id="storeName" name="store_name" 
+                   placeholder="your-store-name (without .myshopify.com)"
+                   class="w-full bg-slate-800/60 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500">
+            <p class="text-xs text-white/60 mt-1">Enter just the store name part (e.g., "my-store" for my-store.myshopify.com)</p>
+          </div>
+          
+          <div>
+            <label class="block text-sm font-medium text-white/90 mb-2">Private App Access Token</label>
+            <input type="password" id="accessToken" name="access_token" 
+                   placeholder="shppa_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                   class="w-full bg-slate-800/60 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500">
+            <p class="text-xs text-white/60 mt-1">Get this from your Shopify Admin → Apps → Private Apps</p>
+          </div>
+          
+          <div class="flex gap-3">
+            <button type="submit" class="btn btn-primary">
+              🔗 Connect Store
+            </button>
+            <button type="button" id="testConnection" class="btn btn-secondary">
+              🧪 Test Connection
+            </button>
+          </div>
+        </form>
+      </div>
+      
+      <!-- How to Get Access Token -->
+      <div class="glass p-6 mb-6">
+        <h3 class="text-xl font-semibold mb-4">📋 How to Get Your Access Token</h3>
+        <div class="space-y-3 text-sm text-white/80">
+          <div class="flex items-start gap-3">
+            <span class="bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">1</span>
+            <div>
+              <strong>Go to your Shopify Admin</strong><br>
+              <span class="text-white/60">Navigate to Settings → Apps and sales channels</span>
+            </div>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">2</span>
+            <div>
+              <strong>Create a Private App</strong><br>
+              <span class="text-white/60">Click "Develop apps" → "Create an app" → Give it a name</span>
+            </div>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">3</span>
+            <div>
+              <strong>Configure API Scopes</strong><br>
+              <span class="text-white/60">Enable: read_orders, read_products, read_customers, read_analytics</span>
+            </div>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">4</span>
+            <div>
+              <strong>Install & Copy Token</strong><br>
+              <span class="text-white/60">Install the app and copy the "Admin API access token"</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Current Data Preview -->
+      <div id="dataPreview" class="glass p-6" style="display: none;">
+        <h3 class="text-xl font-semibold mb-4">📊 Live Data Preview</h3>
+        <div id="previewContent">
+          <!-- Will be populated by JavaScript -->
+        </div>
+      </div>
+    </section>
+    
+    <script>
+      const form = document.getElementById('shopifyForm');
+      const testBtn = document.getElementById('testConnection');
+      const statusDiv = document.getElementById('connectionStatus');
+      const previewDiv = document.getElementById('dataPreview');
+      const previewContent = document.getElementById('previewContent');
+      
+      // Load current configuration
+      async function loadCurrentConfig() {
+        try {
+          const response = await fetch('/api/shopify/config');
+          const data = await response.json();
+          
+          if (data.configured) {
+            document.getElementById('storeName').value = data.store_name;
+            showStatus('success', `✅ Connected to ${data.store_name}.myshopify.com`, data);
+            loadDataPreview();
+          } else {
+            showStatus('warning', '⚠️ Shopify store not configured yet');
+          }
+        } catch (error) {
+          showStatus('error', '❌ Error loading configuration');
+        }
+      }
+      
+      function showStatus(type, message, data = null) {
+        const colors = {
+          success: 'bg-green-500/20 border-green-500/30 text-green-200',
+          warning: 'bg-yellow-500/20 border-yellow-500/30 text-yellow-200',
+          error: 'bg-red-500/20 border-red-500/30 text-red-200'
+        };
+        
+        let extraInfo = '';
+        if (data && data.last_updated) {
+          extraInfo = `<div class="text-xs mt-1 opacity-75">Last updated: ${new Date(data.last_updated).toLocaleString()}</div>`;
+        }
+        
+        statusDiv.innerHTML = `
+          <div class="border rounded-xl p-4 ${colors[type]}">
+            <div class="font-medium">${message}</div>
+            ${extraInfo}
+          </div>
+        `;
+      }
+      
+      // Test connection
+      testBtn.addEventListener('click', async () => {
+        const storeName = document.getElementById('storeName').value.trim();
+        const accessToken = document.getElementById('accessToken').value.trim();
+        
+        if (!storeName || !accessToken) {
+          alert('Please fill in both store name and access token');
+          return;
+        }
+        
+        testBtn.disabled = true;
+        testBtn.textContent = '🔄 Testing...';
+        
+        try {
+          const formData = new FormData();
+          formData.append('store_name', storeName);
+          formData.append('access_token', accessToken);
+          
+          const response = await fetch('/api/shopify/config', {
+            method: 'POST',
+            body: formData
+          });
+          
+          const result = await response.json();
+          
+          if (response.ok) {
+            showStatus('success', `✅ ${result.message}`, result);
+            loadDataPreview();
+          } else {
+            showStatus('error', `❌ ${result.detail}`);
+          }
+        } catch (error) {
+          showStatus('error', '❌ Connection failed: ' + error.message);
+        } finally {
+          testBtn.disabled = false;
+          testBtn.textContent = '🧪 Test Connection';
+        }
+      });
+      
+      // Form submission
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        testBtn.click(); // Reuse test connection logic
+      });
+      
+      // Load data preview
+      async function loadDataPreview() {
+        try {
+          const [ordersRes, analyticsRes] = await Promise.all([
+            fetch('/api/shopify/orders?limit=5'),
+            fetch('/api/shopify/analytics')
+          ]);
+          
+          const orders = await ordersRes.json();
+          const analytics = await analyticsRes.json();
+          
+          previewContent.innerHTML = `
+            <div class="grid md:grid-cols-2 gap-6">
+              <div>
+                <h4 class="font-semibold mb-3">📈 Analytics Summary</h4>
+                <div class="space-y-2 text-sm">
+                  <div>Total Orders: <span class="font-mono">${analytics.total_orders || 0}</span></div>
+                  <div>Today's Orders: <span class="font-mono">${analytics.today_orders || 0}</span></div>
+                  <div>Total Revenue: <span class="font-mono">${analytics.currency} ${analytics.total_revenue || 0}</span></div>
+                  <div>Today's Revenue: <span class="font-mono">${analytics.currency} ${analytics.today_revenue || 0}</span></div>
+                  <div>Pending Orders: <span class="font-mono">${analytics.pending_orders || 0}</span></div>
+                </div>
+              </div>
+              <div>
+                <h4 class="font-semibold mb-3">🛍️ Recent Orders</h4>
+                <div class="space-y-2 text-sm">
+                  ${orders.orders ? orders.orders.slice(0, 3).map(order => `
+                    <div class="bg-white/5 rounded p-2">
+                      <div class="font-mono">#${order.name}</div>
+                      <div class="text-white/60">${order.currency} ${order.total_price}</div>
+                    </div>
+                  `).join('') : '<div class="text-white/60">No orders found</div>'}
+                </div>
+              </div>
+            </div>
+          `;
+          
+          previewDiv.style.display = 'block';
+        } catch (error) {
+          console.error('Error loading preview:', error);
+        }
+      }
+      
+      // Load configuration on page load
+      loadCurrentConfig();
+    </script>
+    """
+    return _eraya_lumen_page("Shopify Settings", body)
 
 # -------------------- Pending & Attendance placeholders --------------------
 @app.get("/pending")
