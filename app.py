@@ -7,13 +7,10 @@ import urllib.request
 import urllib.parse
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, status
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import hashlib
-import secrets
 
 from processor import process_csv_file, extract_color
 
@@ -94,76 +91,15 @@ EMPLOYEES = {
     "Nishant": "EMP006",
 }
 
-# User authentication and roles
-def hash_password(password: str) -> str:
-    """Hash password using SHA-256"""
-    return hashlib.sha256(password.encode()).hexdigest()
-
-# User roles and permissions with authentication
+# User roles and permissions - ALL USERS GET FULL ACCESS
 USER_ROLES = {
-    "EMP001": {"name": "Ritik", "role": "admin", "permissions": ["all"], "password_hash": hash_password("admin123"), "is_active": True},
-    "EMP002": {"name": "Sunny", "role": "manager", "permissions": ["orders", "packing", "attendance", "chat", "reports"], "password_hash": hash_password("sunny123"), "is_active": True},
-    "EMP003": {"name": "Rahul", "role": "employee", "permissions": ["attendance", "chat"], "password_hash": hash_password("rahul123"), "is_active": True},
-    "EMP004": {"name": "Sumit", "role": "employee", "permissions": ["attendance", "chat"], "password_hash": hash_password("sumit123"), "is_active": True},
-    "EMP005": {"name": "Vishal", "role": "employee", "permissions": ["attendance", "chat"], "password_hash": hash_password("vishal123"), "is_active": True},
-    "EMP006": {"name": "Nishant", "role": "manager", "permissions": ["orders", "packing", "attendance", "chat", "reports"], "password_hash": hash_password("nishant123"), "is_active": True},
+    "EMP001": {"name": "Ritik", "role": "admin", "permissions": ["all"]},
+    "EMP002": {"name": "Sunny", "role": "admin", "permissions": ["all"]},
+    "EMP003": {"name": "Rahul", "role": "admin", "permissions": ["all"]},
+    "EMP004": {"name": "Sumit", "role": "admin", "permissions": ["all"]},
+    "EMP005": {"name": "Vishal", "role": "admin", "permissions": ["all"]},
+    "EMP006": {"name": "Nishant", "role": "admin", "permissions": ["all"]},
 }
-
-# Session management
-ACTIVE_SESSIONS = {}  # session_id -> {employee_id, expires_at, created_at}
-
-def create_session(employee_id: str) -> str:
-    """Create a new session for user"""
-    session_id = secrets.token_urlsafe(32)
-    expires_at = datetime.datetime.now() + datetime.timedelta(hours=8)  # 8 hour sessions
-    
-    ACTIVE_SESSIONS[session_id] = {
-        "employee_id": employee_id,
-        "expires_at": expires_at,
-        "created_at": datetime.datetime.now()
-    }
-    return session_id
-
-def get_current_user(request: Request) -> Optional[dict]:
-    """Get current logged-in user from session"""
-    session_id = request.cookies.get("session_id")
-    if not session_id or session_id not in ACTIVE_SESSIONS:
-        return None
-    
-    session = ACTIVE_SESSIONS[session_id]
-    if datetime.datetime.now() > session["expires_at"]:
-        # Session expired
-        del ACTIVE_SESSIONS[session_id]
-        return None
-    
-    employee_id = session["employee_id"]
-    if employee_id not in USER_ROLES or not USER_ROLES[employee_id]["is_active"]:
-        return None
-    
-    user_data = USER_ROLES[employee_id].copy()
-    user_data["employee_id"] = employee_id
-    return user_data
-
-def require_auth(request: Request) -> dict:
-    """Dependency to require authentication"""
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required"
-        )
-    return user
-
-def require_permission(permission: str):
-    """Dependency factory to require specific permission"""
-    def check_permission(user: dict = Depends(require_auth)) -> dict:
-        if user["role"] == "admin" or "all" in user["permissions"] or permission in user["permissions"]:
-            return user
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Permission '{permission}' required"
-        )
-    return check_permission
 
 # Navigation menu structure - EVERYONE GETS FULL ACCESS
 UNIFIED_NAVIGATION_MENU = [
@@ -197,7 +133,7 @@ CHAT_CHANNELS = {
 DIRECT_MESSAGES = {}  # Format: {"EMP001_EMP002": [messages]}
 
 # In-memory store for user online status
-USER_STATUS = {}  # Format: {"EMP001": {"status": "online", "last_seen": timestamp}
+USER_STATUS = {}  # Format: {"EMP001": {"status": "online", "last_seen": timestamp}}
 
 # In-memory store for message reactions
 MESSAGE_REACTIONS = {}
@@ -217,9 +153,188 @@ SHOPIFY_CACHE = {
     "last_updated": None
 }
 
+# -------------------- USER MANAGEMENT SYSTEM --------------------
+# User Management System
+USERS_DATABASE = {
+    "EMP001": {
+        "id": "EMP001",
+        "name": "Ritik",
+        "email": "ritik@company.com",
+        "role": "Super Admin",
+        "status": "active",
+        "photo": "https://via.placeholder.com/100/4f46e5/ffffff?text=R",
+        "created_date": "2024-01-15",
+        "last_login": "2024-01-20 14:30:00",
+        "login_count": 45,
+        "permissions": ["all"],
+        "session_id": "sess_001_active"
+    },
+    "EMP002": {
+        "id": "EMP002",
+        "name": "Sunny",
+        "email": "sunny@company.com",
+        "role": "Admin",
+        "status": "active",
+        "photo": "https://via.placeholder.com/100/059669/ffffff?text=S",
+        "created_date": "2024-01-16",
+        "last_login": "2024-01-20 10:15:00",
+        "login_count": 32,
+        "permissions": ["dashboard", "orders", "packing", "attendance", "chat", "reports"],
+        "session_id": "sess_002_active"
+    },
+    "EMP003": {
+        "id": "EMP003",
+        "name": "Rahul",
+        "email": "rahul@company.com",
+        "role": "Manager",
+        "status": "active",
+        "photo": "https://via.placeholder.com/100/dc2626/ffffff?text=R",
+        "created_date": "2024-01-17",
+        "last_login": "2024-01-19 16:45:00",
+        "login_count": 28,
+        "permissions": ["dashboard", "orders", "packing", "attendance", "chat"],
+        "session_id": "sess_003_active"
+    },
+    "EMP004": {
+        "id": "EMP004",
+        "name": "Sumit",
+        "email": "sumit@company.com",
+        "role": "Employee",
+        "status": "inactive",
+        "photo": "https://via.placeholder.com/100/7c3aed/ffffff?text=S",
+        "created_date": "2024-01-18",
+        "last_login": "2024-01-18 09:20:00",
+        "login_count": 12,
+        "permissions": ["dashboard", "attendance", "chat"],
+        "session_id": None
+    },
+    "EMP005": {
+        "id": "EMP005",
+        "name": "Vishal",
+        "email": "vishal@company.com",
+        "role": "Manager",
+        "status": "active",
+        "photo": "https://via.placeholder.com/100/ea580c/ffffff?text=V",
+        "created_date": "2024-01-19",
+        "last_login": "2024-01-20 11:30:00",
+        "login_count": 15,
+        "permissions": ["dashboard", "orders", "packing", "attendance", "chat"],
+        "session_id": "sess_005_active"
+    },
+    "EMP006": {
+        "id": "EMP006",
+        "name": "Nishant",
+        "email": "nishant@company.com",
+        "role": "Employee",
+        "status": "active",
+        "photo": "https://via.placeholder.com/100/0891b2/ffffff?text=N",
+        "created_date": "2024-01-20",
+        "last_login": "2024-01-20 08:45:00",
+        "login_count": 8,
+        "permissions": ["dashboard", "attendance", "chat"],
+        "session_id": "sess_006_active"
+    }
+}
+
+# Role definitions with permissions
+ROLE_DEFINITIONS = {
+    "Super Admin": {
+        "name": "Super Admin",
+        "description": "Full system access with all permissions",
+        "permissions": ["all"],
+        "color": "#4f46e5"
+    },
+    "Admin": {
+        "name": "Admin",
+        "description": "Administrative access to most features",
+        "permissions": ["dashboard", "orders", "packing", "attendance", "chat", "reports", "shopify"],
+        "color": "#059669"
+    },
+    "Manager": {
+        "name": "Manager",
+        "description": "Management access to operational features",
+        "permissions": ["dashboard", "orders", "packing", "attendance", "chat"],
+        "color": "#dc2626"
+    },
+    "Employee": {
+        "name": "Employee",
+        "description": "Basic access to essential features",
+        "permissions": ["dashboard", "attendance", "chat"],
+        "color": "#7c3aed"
+    }
+}
+
+# Permission definitions
+PERMISSION_DEFINITIONS = {
+    "dashboard": {"name": "Dashboard Access", "description": "View main dashboard and statistics"},
+    "orders": {"name": "Order Management", "description": "Manage orders and order processing"},
+    "packing": {"name": "Packing Operations", "description": "Access packing management features"},
+    "attendance": {"name": "Attendance Tracking", "description": "View and manage attendance records"},
+    "chat": {"name": "Team Chat", "description": "Access team communication features"},
+    "reports": {"name": "Reports & Analytics", "description": "View reports and analytics"},
+    "user_management": {"name": "User Management", "description": "Manage users and permissions"},
+    "system_settings": {"name": "System Settings", "description": "Configure system settings"},
+    "shopify": {"name": "Shopify Integration", "description": "Access Shopify integration features"},
+    "all": {"name": "All Permissions", "description": "Complete system access"}
+}
+
+# Activity logs for audit trail
+USER_ACTIVITY_LOGS = []
+USER_AUDIT_TRAIL = []
+
 def get_timestamp():
     """Returns current UTC timestamp in ISO format."""
     return datetime.datetime.utcnow().isoformat()
+
+# -------------------- USER MANAGEMENT HELPERS --------------------
+def log_user_activity(user_id: str, action: str, details: str = "", ip_address: str = ""):
+    """Log user activity for audit trail."""
+    activity = {
+        "timestamp": get_timestamp(),
+        "user_id": user_id,
+        "user_name": USERS_DATABASE.get(user_id, {}).get("name", "Unknown"),
+        "action": action,
+        "details": details,
+        "ip_address": ip_address
+    }
+    USER_ACTIVITY_LOGS.append(activity)
+    
+    # Keep only last 1000 entries
+    if len(USER_ACTIVITY_LOGS) > 1000:
+        USER_ACTIVITY_LOGS.pop(0)
+
+def log_audit_trail(admin_user_id: str, target_user_id: str, action: str, old_value: str = "", new_value: str = ""):
+    """Log administrative actions for audit trail."""
+    audit_entry = {
+        "timestamp": get_timestamp(),
+        "admin_user_id": admin_user_id,
+        "admin_name": USERS_DATABASE.get(admin_user_id, {}).get("name", "Unknown"),
+        "target_user_id": target_user_id,
+        "target_name": USERS_DATABASE.get(target_user_id, {}).get("name", "Unknown"),
+        "action": action,
+        "old_value": old_value,
+        "new_value": new_value
+    }
+    USER_AUDIT_TRAIL.append(audit_entry)
+    
+    # Keep only last 1000 entries
+    if len(USER_AUDIT_TRAIL) > 1000:
+        USER_AUDIT_TRAIL.pop(0)
+
+def get_user_stats():
+    """Get user statistics for dashboard."""
+    total_users = len(USERS_DATABASE)
+    active_users = len([u for u in USERS_DATABASE.values() if u["status"] == "active"])
+    inactive_users = total_users - active_users
+    admin_count = len([u for u in USERS_DATABASE.values() if u["role"] in ["Super Admin", "Admin"]])
+    
+    return {
+        "total_users": total_users,
+        "active_users": active_users,
+        "inactive_users": inactive_users,
+        "admin_count": admin_count,
+        "roles_breakdown": {role: len([u for u in USERS_DATABASE.values() if u["role"] == role]) for role in ROLE_DEFINITIONS.keys()}
+    }
 
 # -------------------- SHOPIFY API HELPERS --------------------
 def make_shopify_request(endpoint: str, params: Dict = None) -> Dict:
@@ -390,547 +505,8 @@ def run_job(job_id: str, csv_path: Path, out_dir: Path, options: dict):
 
 @app.get("/", response_class=HTMLResponse)
 def root():
-    # Redirect to login page
-    return RedirectResponse(url="/login")
-
-@app.get("/login")
-def login_page(request: Request):
-    # Check if user is already logged in
-    user = get_current_user(request)
-    if user:
-        return RedirectResponse(url="/hub")
-    
-    body = """
-    <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
-      <div class="max-w-md w-full space-y-8 p-8">
-        <div class="text-center">
-          <h1 class="text-4xl font-bold text-white mb-2">Eraya Lumen</h1>
-          <h2 class="text-xl text-white/80 mb-8">Employee Login</h2>
-        </div>
-        
-        <div class="glass p-8 rounded-2xl">
-          <form id="loginForm" class="space-y-6">
-            <div>
-              <label class="block text-white/90 text-sm font-medium mb-2">Employee ID</label>
-              <input type="text" id="employeeId" placeholder="EMP001" 
-                     class="w-full px-4 py-3 rounded-xl bg-slate-800/60 border border-white/10 text-white placeholder-white/50 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 outline-none transition-all">
-            </div>
-            
-            <div>
-              <label class="block text-white/90 text-sm font-medium mb-2">Password</label>
-              <input type="password" id="password" placeholder="Enter your password" 
-                     class="w-full px-4 py-3 rounded-xl bg-slate-800/60 border border-white/10 text-white placeholder-white/50 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 outline-none transition-all">
-            </div>
-            
-            <div id="errorMessage" class="text-red-400 text-sm hidden"></div>
-            
-            <button type="submit" id="loginBtn" 
-                    class="w-full bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-semibold py-3 px-4 rounded-xl transition-all transform hover:scale-[1.02] active:scale-[0.98]">
-              Sign In
-            </button>
-          </form>
-          
-          <div class="mt-6 text-center">
-            <div class="text-white/60 text-sm">Default Passwords:</div>
-            <div class="text-white/50 text-xs mt-2">
-              Admin: admin123 | Manager: name123 | Employee: name123
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-    
-    <style>
-      .glass {
-        background: rgba(255, 255, 255, 0.05);
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-      }
-    </style>
-    
-    <script>
-      document.getElementById('loginForm').onsubmit = function(e) {
-        e.preventDefault();
-        
-        const employeeId = document.getElementById('employeeId').value.trim();
-        const password = document.getElementById('password').value;
-        const errorDiv = document.getElementById('errorMessage');
-        const loginBtn = document.getElementById('loginBtn');
-        
-        if (!employeeId || !password) {
-          errorDiv.textContent = 'Please enter both Employee ID and Password';
-          errorDiv.classList.remove('hidden');
-          return;
-        }
-        
-        // Clear error and show loading
-        errorDiv.classList.add('hidden');
-        loginBtn.disabled = true;
-        loginBtn.textContent = 'Signing in...';
-        
-        // Send login request
-        fetch('/api/login', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            employee_id: employeeId.toUpperCase(),
-            password: password
-          })
-        })
-        .then(response => response.json())
-        .then(data => {
-          if (data.success) {
-            // Set cookie and redirect
-            document.cookie = `session_id=$${data.session_id}; path=/; max-age=28800`; // 8 hours
-            window.location.href = '/hub';
-          } else {
-            errorDiv.textContent = data.message || 'Login failed';
-            errorDiv.classList.remove('hidden');
-          }
-        })
-        .catch(error => {
-          console.error('Login error:', error);
-          errorDiv.textContent = 'Network error. Please try again.';
-          errorDiv.classList.remove('hidden');
-        })
-        .finally(() => {
-          loginBtn.disabled = false;
-          loginBtn.textContent = 'Sign In';
-        });
-      };
-      
-      // Focus on employee ID field
-      document.getElementById('employeeId').focus();
-    </script>
-    """
-    
-    return HTMLResponse(content=body)
-
-@app.post("/api/login")
-def login_api(request: dict):
-    employee_id = request.get("employee_id", "").strip().upper()
-    password = request.get("password", "")
-    
-    if not employee_id or not password:
-        return JSONResponse(content={"success": False, "message": "Employee ID and password are required"})
-    
-    # Check if user exists and is active
-    if employee_id not in USER_ROLES:
-        return JSONResponse(content={"success": False, "message": "Invalid Employee ID"})
-    
-    user = USER_ROLES[employee_id]
-    if not user["is_active"]:
-        return JSONResponse(content={"success": False, "message": "Account is disabled"})
-    
-    # Verify password
-    password_hash = hash_password(password)
-    if password_hash != user["password_hash"]:
-        return JSONResponse(content={"success": False, "message": "Invalid password"})
-    
-    # Create session
-    session_id = create_session(employee_id)
-    
-    return JSONResponse(content={
-        "success": True,
-        "session_id": session_id,
-        "user": {
-            "employee_id": employee_id,
-            "name": user["name"],
-            "role": user["role"]
-        }
-    })
-
-@app.get("/api/user/current")
-def get_current_user_api(request: Request):
-    user = get_current_user(request)
-    if not user:
-        return JSONResponse(content={"success": False, "message": "Not authenticated"})
-    
-    return JSONResponse(content={
-        "success": True,
-        "user": {
-            "employee_id": user["employee_id"],
-            "name": user["name"],
-            "role": user["role"],
-            "permissions": user["permissions"]
-        }
-    })
-
-@app.get("/logout")
-def logout(request: Request):
-    session_id = request.cookies.get("session_id")
-    if session_id and session_id in ACTIVE_SESSIONS:
-        del ACTIVE_SESSIONS[session_id]
-    
-    response = RedirectResponse(url="/login")
-    response.delete_cookie("session_id")
-    return response
-
-@app.get("/admin/users")
-def admin_users_page(request: Request, user: dict = Depends(require_permission("admin"))):
-    body = """
-    <section class="glass p-6">
-      <h1 class="text-3xl font-bold">User Management</h1>
-      <p class="text-white/80 mt-2">Manage employee accounts, roles, and passwords.</p>
-      
-      <div class="mt-6 grid gap-6">
-        <!-- Add New User -->
-        <div class="glass p-5">
-          <h2 class="text-xl font-semibold mb-4">Add New User</h2>
-          <form id="addUserForm" class="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <input id="newEmployeeId" placeholder="Employee ID (EMP007)" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm"/>
-            <input id="newName" placeholder="Full Name" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm"/>
-            <select id="newRole" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm">
-              <option value="employee">Employee</option>
-              <option value="manager">Manager</option>
-              <option value="admin">Admin</option>
-            </select>
-            <button type="submit" class="btn btn-primary">Add User</button>
-          </form>
-        </div>
-        
-        <!-- Users List -->
-        <div class="glass p-0 overflow-auto">
-          <table class="min-w-full text-sm">
-            <thead class="bg-slate-900/80">
-              <tr>
-                <th class="text-left p-4 border-b border-white/10">Employee ID</th>
-                <th class="text-left p-4 border-b border-white/10">Name</th>
-                <th class="text-left p-4 border-b border-white/10">Role</th>
-                <th class="text-left p-4 border-b border-white/10">Status</th>
-                <th class="text-left p-4 border-b border-white/10">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="usersTableBody">
-              <!-- Users will be loaded here -->
-            </tbody>
-          </table>
-        </div>
-      </div>
-      
-      <!-- Edit User Modal -->
-      <div id="editModal" class="fixed inset-0 hidden items-center justify-center bg-black/70 p-6">
-        <div class="bg-slate-900/90 border border-white/10 rounded-2xl p-6 max-w-md w-full">
-          <h3 class="text-xl font-semibold mb-4">Edit User</h3>
-          <form id="editUserForm" class="space-y-4">
-            <input type="hidden" id="editEmployeeId">
-            <div>
-              <label class="block text-white/90 text-sm font-medium mb-2">Name</label>
-              <input id="editName" class="w-full rounded-xl bg-slate-800/60 border border-white/10 px-3 py-2 text-sm"/>
-            </div>
-            <div>
-              <label class="block text-white/90 text-sm font-medium mb-2">Role</label>
-              <select id="editRole" class="w-full rounded-xl bg-slate-800/60 border border-white/10 px-3 py-2 text-sm">
-                <option value="employee">Employee</option>
-                <option value="manager">Manager</option>
-                <option value="admin">Admin</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-white/90 text-sm font-medium mb-2">New Password (leave blank to keep current)</label>
-              <input type="password" id="editPassword" class="w-full rounded-xl bg-slate-800/60 border border-white/10 px-3 py-2 text-sm"/>
-            </div>
-            <div class="flex gap-3">
-              <button type="submit" class="btn btn-primary flex-1">Save Changes</button>
-              <button type="button" onclick="closeEditModal()" class="btn btn-secondary flex-1">Cancel</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    </section>
-    
-    <script>
-      // Load users on page load
-      loadUsers();
-      
-      function loadUsers() {
-        fetch('/api/admin/users')
-          .then(response => response.json())
-          .then(data => {
-            if (data.success) {
-              renderUsers(data.users);
-            } else {
-              alert('Error loading users: ' + data.message);
-            }
-          })
-          .catch(error => {
-            console.error('Error loading users:', error);
-            alert('Network error loading users');
-          });
-      }
-      
-      function renderUsers(users) {
-        const tbody = document.getElementById('usersTableBody');
-        tbody.innerHTML = '';
-        
-        Object.entries(users).forEach(([employeeId, user]) => {
-          const row = document.createElement('tr');
-          row.innerHTML = `
-            <td class="p-4 border-b border-white/10">${employeeId}</td>
-            <td class="p-4 border-b border-white/10">${user.name}</td>
-            <td class="p-4 border-b border-white/10">
-              <span class="role-badge ${user.role}">${user.role.charAt(0).toUpperCase() + user.role.slice(1)}</span>
-            </td>
-            <td class="p-4 border-b border-white/10">
-              <span class="badge ${user.is_active ? 'bg-green-500' : 'bg-red-500'}">${user.is_active ? 'Active' : 'Disabled'}</span>
-            </td>
-            <td class="p-4 border-b border-white/10">
-              <button onclick="editUser('${employeeId}')" class="btn btn-sm btn-secondary mr-2">Edit</button>
-              <button onclick="toggleUser('${employeeId}', ${!user.is_active})" class="btn btn-sm ${user.is_active ? 'btn-accent' : 'btn-primary'}">
-                ${user.is_active ? 'Disable' : 'Enable'}
-              </button>
-            </td>
-          `;
-          tbody.appendChild(row);
-        });
-      }
-      
-      // Add new user
-      document.getElementById('addUserForm').onsubmit = function(e) {
-        e.preventDefault();
-        
-        const employeeId = document.getElementById('newEmployeeId').value.trim().toUpperCase();
-        const name = document.getElementById('newName').value.trim();
-        const role = document.getElementById('newRole').value;
-        
-        if (!employeeId || !name) {
-          alert('Please fill in all fields');
-          return;
-        }
-        
-        fetch('/api/admin/users', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            employee_id: employeeId,
-            name: name,
-            role: role
-          })
-        })
-        .then(response => response.json())
-        .then(data => {
-          if (data.success) {
-            alert('User added successfully! Default password: ' + data.default_password);
-            document.getElementById('addUserForm').reset();
-            loadUsers();
-          } else {
-            alert('Error: ' + data.message);
-          }
-        })
-        .catch(error => {
-          console.error('Error adding user:', error);
-          alert('Network error');
-        });
-      };
-      
-      // Edit user
-      function editUser(employeeId) {
-        fetch('/api/admin/users/' + employeeId)
-          .then(response => response.json())
-          .then(data => {
-            if (data.success) {
-              document.getElementById('editEmployeeId').value = employeeId;
-              document.getElementById('editName').value = data.user.name;
-              document.getElementById('editRole').value = data.user.role;
-              document.getElementById('editPassword').value = '';
-              document.getElementById('editModal').classList.remove('hidden');
-              document.getElementById('editModal').classList.add('flex');
-            }
-          })
-          .catch(error => {
-            console.error('Error loading user:', error);
-            alert('Network error');
-          });
-      }
-      
-      function closeEditModal() {
-        document.getElementById('editModal').classList.add('hidden');
-        document.getElementById('editModal').classList.remove('flex');
-      }
-      
-      // Save user changes
-      document.getElementById('editUserForm').onsubmit = function(e) {
-        e.preventDefault();
-        
-        const employeeId = document.getElementById('editEmployeeId').value;
-        const name = document.getElementById('editName').value.trim();
-        const role = document.getElementById('editRole').value;
-        const password = document.getElementById('editPassword').value;
-        
-        const updateData = { name, role };
-        if (password) {
-          updateData.password = password;
-        }
-        
-        fetch('/api/admin/users/' + employeeId, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updateData)
-        })
-        .then(response => response.json())
-        .then(data => {
-          if (data.success) {
-            alert('User updated successfully!');
-            closeEditModal();
-            loadUsers();
-          } else {
-            alert('Error: ' + data.message);
-          }
-        })
-        .catch(error => {
-          console.error('Error updating user:', error);
-          alert('Network error');
-        });
-      };
-      
-      // Toggle user active status
-      function toggleUser(employeeId, enable) {
-        const action = enable ? 'enable' : 'disable';
-        if (!confirm(`Are you sure you want to ${action} this user?`)) return;
-        
-        fetch('/api/admin/users/' + employeeId + '/toggle', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ is_active: enable })
-        })
-        .then(response => response.json())
-        .then(data => {
-          if (data.success) {
-            loadUsers();
-          } else {
-            alert('Error: ' + data.message);
-          }
-        })
-        .catch(error => {
-          console.error('Error toggling user:', error);
-          alert('Network error');
-        });
-      }
-    </script>
-    
-    <style>
-      .badge { padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; }
-      .role-badge.admin { background: #ef4444; color: white; }
-      .role-badge.manager { background: #f59e0b; color: white; }
-      .role-badge.employee { background: #10b981; color: white; }
-    </style>
-    """
-    
-    return _eraya_lumen_page("User Management", body)
-
-# Admin User Management API Endpoints
-@app.get("/api/admin/users")
-def get_all_users(request: Request, admin: dict = Depends(require_permission("admin"))):
-    """Get all users (admin only)"""
-    return JSONResponse(content={"success": True, "users": USER_ROLES})
-
-@app.get("/api/admin/users/{employee_id}")
-def get_user(employee_id: str, request: Request, admin: dict = Depends(require_permission("admin"))):
-    """Get specific user details"""
-    if employee_id not in USER_ROLES:
-        return JSONResponse(content={"success": False, "message": "User not found"})
-    
-    user = USER_ROLES[employee_id].copy()
-    user.pop("password_hash", None)  # Don't send password hash
-    return JSONResponse(content={"success": True, "user": user})
-
-@app.post("/api/admin/users")
-def create_user(request: dict, req: Request, admin: dict = Depends(require_permission("admin"))):
-    """Create new user"""
-    employee_id = request.get("employee_id", "").strip().upper()
-    name = request.get("name", "").strip()
-    role = request.get("role", "employee")
-    
-    if not employee_id or not name:
-        return JSONResponse(content={"success": False, "message": "Employee ID and name are required"})
-    
-    if employee_id in USER_ROLES:
-        return JSONResponse(content={"success": False, "message": "Employee ID already exists"})
-    
-    if role not in ["employee", "manager", "admin"]:
-        return JSONResponse(content={"success": False, "message": "Invalid role"})
-    
-    # Generate default password
-    default_password = name.lower().replace(" ", "") + "123"
-    
-    # Set permissions based on role
-    permissions = {
-        "employee": ["attendance", "chat"],
-        "manager": ["orders", "packing", "attendance", "chat", "reports"],
-        "admin": ["all"]
-    }
-    
-    USER_ROLES[employee_id] = {
-        "name": name,
-        "role": role,
-        "permissions": permissions[role],
-        "password_hash": hash_password(default_password),
-        "is_active": True
-    }
-    
-    return JSONResponse(content={
-        "success": True, 
-        "message": "User created successfully",
-        "default_password": default_password
-    })
-
-@app.put("/api/admin/users/{employee_id}")
-def update_user(employee_id: str, request: dict, req: Request, admin: dict = Depends(require_permission("admin"))):
-    """Update user details"""
-    if employee_id not in USER_ROLES:
-        return JSONResponse(content={"success": False, "message": "User not found"})
-    
-    name = request.get("name", "").strip()
-    role = request.get("role", "")
-    password = request.get("password", "")
-    
-    if not name:
-        return JSONResponse(content={"success": False, "message": "Name is required"})
-    
-    if role not in ["employee", "manager", "admin"]:
-        return JSONResponse(content={"success": False, "message": "Invalid role"})
-    
-    # Set permissions based on role
-    permissions = {
-        "employee": ["attendance", "chat"],
-        "manager": ["orders", "packing", "attendance", "chat", "reports"],
-        "admin": ["all"]
-    }
-    
-    # Update user data
-    USER_ROLES[employee_id]["name"] = name
-    USER_ROLES[employee_id]["role"] = role
-    USER_ROLES[employee_id]["permissions"] = permissions[role]
-    
-    # Update password if provided
-    if password:
-        USER_ROLES[employee_id]["password_hash"] = hash_password(password)
-    
-    return JSONResponse(content={"success": True, "message": "User updated successfully"})
-
-@app.post("/api/admin/users/{employee_id}/toggle")
-def toggle_user_status(employee_id: str, request: dict, req: Request, admin: dict = Depends(require_permission("admin"))):
-    """Enable/disable user account"""
-    if employee_id not in USER_ROLES:
-        return JSONResponse(content={"success": False, "message": "User not found"})
-    
-    is_active = request.get("is_active", True)
-    USER_ROLES[employee_id]["is_active"] = is_active
-    
-    # Invalidate user's sessions if disabling
-    if not is_active:
-        sessions_to_remove = []
-        for session_id, session_data in ACTIVE_SESSIONS.items():
-            if session_data["employee_id"] == employee_id:
-                sessions_to_remove.append(session_id)
-        
-        for session_id in sessions_to_remove:
-            del ACTIVE_SESSIONS[session_id]
-    
-    action = "enabled" if is_active else "disabled"
-    return JSONResponse(content={"success": True, "message": f"User {action} successfully"})
+    # Redirect to the hub (dashboard) page instead of showing raw static HTML
+    return RedirectResponse(url="/hub")
 
 
 @app.post("/api/process")
@@ -994,33 +570,33 @@ def api_download(job_id: str):
 
 # -------------------- ERAYA HUB ADD-ON (UI shell) --------------------
 def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
-    html = """
+    html = f"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>""" + title + """ — Eraya Ops</title>
+  <title>{title} — Eraya Ops</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    :root { --brand:#a78bfa; --brand-strong:#8b5cf6; --accent:#f0abfc; }
-    .glass{backdrop-filter:blur(10px);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.12);border-radius:1.25rem;}
-    .btn{display:inline-flex;align-items:center;justify-content:center;border-radius:1rem;padding:.6rem 1rem;font-weight:600;box-shadow:0 6px 20px rgba(168,139,250,.25), inset 0 1px 0 rgba(255,255,255,.08);}
-    .btn-primary{background:linear-gradient(135deg,var(--brand-strong),var(--accent));color:#0b0416}
-    .btn-secondary{background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.2)}
-    *{scrollbar-width:thin;scrollbar-color:var(--brand) #0f172a}
-    *::-webkit-scrollbar{height:8px;width:8px}
-    *::-webkit-scrollbar-thumb{background:var(--brand);border-radius:8px}
+    :root {{ --brand:#a78bfa; --brand-strong:#8b5cf6; --accent:#f0abfc; }}
+    .glass{{backdrop-filter:blur(10px);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.12);border-radius:1.25rem;}}
+    .btn{{display:inline-flex;align-items:center;justify-content:center;border-radius:1rem;padding:.6rem 1rem;font-weight:600;box-shadow:0 6px 20px rgba(168,139,250,.25), inset 0 1px 0 rgba(255,255,255,.08);}}
+    .btn-primary{{background:linear-gradient(135deg,var(--brand-strong),var(--accent));color:#0b0416}}
+    .btn-secondary{{background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.2)}}
+    *{{scrollbar-width:thin;scrollbar-color:var(--brand) #0f172a}}
+    *::-webkit-scrollbar{{height:8px;width:8px}}
+    *::-webkit-scrollbar-thumb{{background:var(--brand);border-radius:8px}}
 
     /* Sidebar Styles */
-    .sidebar {
+    .sidebar {{
       width: 280px;
       transition: width 0.3s ease;
-    }
-    .sidebar.collapsed {
+    }}
+    .sidebar.collapsed {{
       width: 80px;
-    }
-    .sidebar-item {
+    }}
+    .sidebar-item {{
       display: flex;
       align-items: center;
       padding: 12px 16px;
@@ -1030,22 +606,22 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
       cursor: pointer;
       text-decoration: none;
       color: rgba(255,255,255,0.7);
-    }
-    .sidebar-item:hover {
+    }}
+    .sidebar-item:hover {{
       background: rgba(255,255,255,0.08);
       color: white;
       transform: translateX(4px);
-    }
-    .sidebar-item.active {
+    }}
+    .sidebar-item.active {{
       background: linear-gradient(135deg,var(--brand-strong),var(--accent));
       color: #0b0416;
       font-weight: 600;
-    }
-    .sidebar-item.disabled {
+    }}
+    .sidebar-item.disabled {{
       opacity: 0.5;
       cursor: not-allowed;
-    }
-    .sidebar-icon {
+    }}
+    .sidebar-icon {{
       width: 24px;
       height: 24px;
       display: flex;
@@ -1053,27 +629,27 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
       justify-content: center;
       font-size: 18px;
       margin-right: 12px;
-    }
-    .sidebar-text {
+    }}
+    .sidebar-text {{
       flex: 1;
       font-size: 14px;
       font-weight: 500;
-    }
-    .sidebar.collapsed .sidebar-text {
+    }}
+    .sidebar.collapsed .sidebar-text {{
       display: none;
-    }
-    .sidebar-badge {
+    }}
+    .sidebar-badge {{
       background: rgba(239, 68, 68, 0.9);
       color: white;
       font-size: 10px;
       padding: 2px 6px;
       border-radius: 10px;
       font-weight: 600;
-    }
-    .sidebar.collapsed .sidebar-badge {
+    }}
+    .sidebar.collapsed .sidebar-badge {{
       display: none;
-    }
-    .sidebar-separator {
+    }}
+    .sidebar-separator {{
       margin: 16px 12px 8px 12px;
       padding: 8px 4px;
       font-size: 11px;
@@ -1082,18 +658,18 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
       text-transform: uppercase;
       letter-spacing: 0.5px;
       border-top: 1px solid rgba(255,255,255,0.1);
-    }
-    .sidebar.collapsed .sidebar-separator {
+    }}
+    .sidebar.collapsed .sidebar-separator {{
       display: none;
-    }
-    .main-content {
+    }}
+    .main-content {{
       margin-left: 280px;
       transition: margin-left 0.3s ease;
-    }
-    .main-content.expanded {
+    }}
+    .main-content.expanded {{
       margin-left: 80px;
-    }
-    .role-badge {
+    }}
+    .role-badge {{
       background: linear-gradient(135deg, #10b981, #059669);
       color: white;
       font-size: 10px;
@@ -1101,26 +677,26 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
       border-radius: 12px;
       font-weight: 600;
       text-transform: uppercase;
-    }
-    .role-badge.manager {
+    }}
+    .role-badge.manager {{
       background: linear-gradient(135deg, #f59e0b, #d97706);
-    }
-    .role-badge.admin {
+    }}
+    .role-badge.admin {{
       background: linear-gradient(135deg, #dc2626, #b91c1c);
-    }
+    }}
     
-    @media (max-width: 768px) {
-      .sidebar {
+    @media (max-width: 768px) {{
+      .sidebar {{
         transform: translateX(-100%);
         z-index: 50;
-      }
-      .sidebar.mobile-open {
+      }}
+      .sidebar.mobile-open {{
         transform: translateX(0);
-      }
-      .main-content {
+      }}
+      .main-content {{
         margin-left: 0;
-      }
-    }
+      }}
+    }}
   </style>
 </head>
 <body class="min-h-screen text-white bg-gradient-to-br from-slate-950 via-indigo-950 to-fuchsia-900">
@@ -1134,9 +710,8 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
         <div class="flex-1 min-w-0">
           <div class="text-lg font-semibold tracking-wide">Eraya Ops</div>
                 <div id="userInfo" class="flex items-center gap-2 mt-1">
-        <span class="text-xs text-white/60" id="userName">Loading...</span>
-        <span class="role-badge admin" id="userRole">Loading...</span>
-        <button onclick="logout()" class="text-xs text-red-400 hover:text-red-300 ml-2">Logout</button>
+        <span class="text-xs text-white/60">Admin Access</span>
+        <span class="role-badge admin">Full Access</span>
       </div>
     </div>
     <button id="sidebarToggle" class="p-2 hover:bg-white/10 rounded-lg">
@@ -1173,11 +748,11 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
   </header>
 
     <main class="px-4 py-10 md:px-8 lg:px-12">
-    """ + body_html + """
+    {body_html}
   </main>
 
   <footer class="border-t border-white/10 py-8 text-center text-white/70">
-    Built with ❤️ for Eraya — """ + title + """
+    Built with ❤️ for Eraya — {title}
   </footer>
   </div>
 
@@ -1193,140 +768,118 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
     const mobileMenuToggle = document.getElementById('mobileMenuToggle');
 
     // Toggle sidebar
-    function toggleSidebar() {
+    function toggleSidebar() {{
         sidebarCollapsed = !sidebarCollapsed;
-        if (sidebarCollapsed) {
+        if (sidebarCollapsed) {{
             sidebar.classList.add('collapsed');
             mainContent.classList.add('expanded');
             sidebarToggle.innerHTML = '<span class="text-lg">⟩</span>';
-        } else {
+        }} else {{
             sidebar.classList.remove('collapsed');
             mainContent.classList.remove('expanded');
             sidebarToggle.innerHTML = '<span class="text-lg">⟨</span>';
-        }
+        }}
         // Save state
         localStorage.setItem('sidebarCollapsed', sidebarCollapsed.toString());
-    }
+    }}
 
     // Mobile menu toggle
-    function toggleMobileMenu() {
+    function toggleMobileMenu() {{
         sidebar.classList.toggle('mobile-open');
-    }
+    }}
 
     // Load navigation menu directly
-    async function loadNavigation() {
-        try {
+    async function loadNavigation() {{
+        try {{
             const response = await fetch('/api/navigation/admin');
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
+            if (!response.ok) {{
+                throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
+            }}
             const data = await response.json();
             
             // Render navigation menu
             renderNavigationMenu(data.menu);
             
-        } catch (error) {
+        }} catch (error) {{
             console.error('Error loading navigation:', error);
             navigationMenu.innerHTML = '<div class="text-center text-red-400 text-sm p-4">Error loading navigation</div>';
-        }
-    }
+        }}
+    }}
 
     // Render navigation menu
-    function renderNavigationMenu(menuItems) {
+    function renderNavigationMenu(menuItems) {{
         let html = '';
         
-        menuItems.forEach(item => {
-            if (item.type === 'separator') {
-                html += `<div class="sidebar-separator">${item.name}</div>`;
-            } else {
+        menuItems.forEach(item => {{
+            if (item.type === 'separator') {{
+                html += `<div class="sidebar-separator">${{item.name}}</div>`;
+            }} else {{
                 const activeClass = window.location.pathname === item.url ? 'active' : '';
                 const disabledClass = !item.active ? 'disabled' : '';
-                const badge = item.badge ? `<span class="sidebar-badge">${item.badge}</span>` : '';
+                const badge = item.badge ? `<span class="sidebar-badge">${{item.badge}}</span>` : '';
                 
                 html += `
-                    <a href="${item.active ? item.url : '#'}" class="sidebar-item ${activeClass} ${disabledClass}" ${!item.active ? 'onclick="return false;"' : ''}>
-                        <div class="sidebar-icon">${item.icon}</div>
-                        <div class="sidebar-text">${item.name}</div>
-                        ${badge}
+                    <a href="${{item.active ? item.url : '#'}}" class="sidebar-item ${{activeClass}} ${{disabledClass}}" ${{!item.active ? 'onclick="return false;"' : ''}}>
+                        <div class="sidebar-icon">${{item.icon}}</div>
+                        <div class="sidebar-text">${{item.name}}</div>
+                        ${{badge}}
                     </a>
                 `;
-            }
-        });
+            }}
+        }});
         
         navigationMenu.innerHTML = html;
-    }
+    }}
 
     // Event listeners
     sidebarToggle.addEventListener('click', toggleSidebar);
     mobileMenuToggle?.addEventListener('click', toggleMobileMenu);
 
     // Initialize sidebar - ENSURE THIS RUNS AFTER DOM IS READY
-    function initializeSidebar() {
+    function initializeSidebar() {{
         // Restore sidebar collapsed state
         const savedCollapsed = localStorage.getItem('sidebarCollapsed');
-        if (savedCollapsed === 'true') {
+        if (savedCollapsed === 'true') {{
             sidebarCollapsed = true;
             sidebar.classList.add('collapsed');
             mainContent.classList.add('expanded');
             sidebarToggle.innerHTML = '<span class="text-lg">⟩</span>';
-        }
+        }}
         
         // Load navigation menu directly
         loadNavigation();
-        loadUserInfo();
-    }
-    
-    function loadUserInfo() {
-      fetch('/api/user/current')
-        .then(response => response.json())
-        .then(data => {
-          if (data.success) {
-            document.getElementById('userName').textContent = data.user.name;
-            document.getElementById('userRole').textContent = data.user.role.charAt(0).toUpperCase() + data.user.role.slice(1);
-            document.getElementById('userRole').className = 'role-badge ' + data.user.role;
-          }
-        })
-        .catch(error => {
-          console.error('Error loading user info:', error);
-        });
-    }
-    
-    function logout() {
-      if (confirm('Are you sure you want to logout?')) {
-        window.location.href = '/logout';
-      }
-    }
+    }}
     
     // Initialize after a short delay to ensure DOM is ready
     setTimeout(initializeSidebar, 100);
     
     // Also initialize when DOM is fully loaded (backup)
-    if (document.readyState === 'loading') {
+    if (document.readyState === 'loading') {{
         document.addEventListener('DOMContentLoaded', initializeSidebar);
-    } else {
+    }} else {{
         // DOM is already loaded, initialize immediately as backup
         initializeSidebar();
-    }
+    }}
 
     // Handle responsive behavior
-    function handleResize() {
-        if (window.innerWidth < 768) {
+    function handleResize() {{
+        if (window.innerWidth < 768) {{
             mainContent.style.marginLeft = '0';
-        } else {
+        }} else {{
             sidebar.classList.remove('mobile-open');
             mainContent.style.marginLeft = sidebarCollapsed ? '80px' : '280px';
-        }
-    }
+        }}
+    }}
 
     window.addEventListener('resize', handleResize);
     handleResize(); // Initial call
 
     // Close mobile menu when clicking outside
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth < 768 && !sidebar.contains(e.target) && !mobileMenuToggle?.contains(e.target)) {
+    document.addEventListener('click', function(e) {{
+        if (window.innerWidth < 768 && !sidebar.contains(e.target) && !mobileMenuToggle?.contains(e.target)) {{
             sidebar.classList.remove('mobile-open');
-        }
-    });
+        }}
+    }});
   </script>
 </body>
 </html>
@@ -1336,7 +889,7 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
 
 # -------------------- DASHBOARD --------------------
 @app.get("/hub")
-def eraya_hub_home(request: Request, user: dict = Depends(require_auth)):
+def eraya_hub_home():
     body = """
     <!-- Header Section -->
     <section class="text-center">
@@ -1892,7 +1445,7 @@ def eraya_orders_page():
             <button type="button" id="exportOrders" class="btn btn-secondary">Export CSV (filtered)</button>
             <button type="button" id="exportSelected" class="btn btn-accent" disabled>Export Selected (<span id="selectedCount">0</span>)</button>
             <button type="button" id="downloadPhotos" class="btn btn-accent" disabled>Download Photos (<span id="selectedPhotos">0</span>)</button>
-            <div id="status" class="text-white/70">🔄 Auto-fetching ALL orders...</div>
+            <div id="status" class="text-white/70">🔄 Auto-fetching orders...</div>
           </div>
           <div class="flex flex-wrap items-center gap-3 mt-2">
             <button type="button" id="selectAll" class="btn btn-sm btn-secondary">Select All</button>
@@ -2166,8 +1719,8 @@ def eraya_orders_page():
         pageinfo.textContent='Page '+page+' / '+pages+' — '+total+' rows';
         prev.disabled=page<=1; next.disabled=page>=pages;
         
-        // Hide load more button since we auto-load everything
-        loadMoreBtn.style.display = 'none';
+        // Show/hide load more button
+        loadMoreBtn.style.display = nextPageInfo ? 'inline-block' : 'none';
         
         // Update selection UI
         updateSelectionUI();
@@ -2245,25 +1798,14 @@ def eraya_orders_page():
       }
 
       function fetchOrdersFromShopify() {
-        status.textContent='🔄 Fetching ALL orders from Shopify...'; 
+        status.textContent='Fetching from Shopify...'; 
         head.innerHTML=''; 
         body.innerHTML='';
         fetchBtn.disabled = true;
-        fetchBtn.textContent = '🔄 Fetching All Orders...';
-        rows = []; // Reset rows
+        fetchBtn.textContent = '🔄 Fetching...';
         
-        // Fetch all orders recursively
-        fetchAllOrdersRecursively(null, 0);
-      }
-      
-      function fetchAllOrdersRecursively(pageInfo, totalFetched) {
         var selectedStatus = qStatus.value;
-        var url = '/api/shopify/orders?status='+encodeURIComponent(selectedStatus)+'&limit=250'; // Max limit
-        if (pageInfo) {
-          url += '&page_info='+encodeURIComponent(pageInfo);
-        }
-        
-        fetch(url)
+        fetch('/api/shopify/orders?status='+encodeURIComponent(selectedStatus)+'&limit=100')
           .then(function(res){ 
             return res.text().then(function(t){ 
               return {ok:res.ok, status:res.status, text:t};
@@ -2290,8 +1832,6 @@ def eraya_orders_page():
                 errorMsg += x.text || ('HTTP ' + x.status);
               }
               status.textContent = errorMsg;
-              fetchBtn.disabled = false;
-              fetchBtn.textContent = 'Fetch from Shopify';
               return; 
             }
             
@@ -2301,44 +1841,21 @@ def eraya_orders_page():
             try{ 
               data=JSON.parse(x.text); 
             } catch(e){ 
-              status.textContent='Bad JSON from server';
-              fetchBtn.disabled = false;
-              fetchBtn.textContent = 'Fetch from Shopify';
+              status.textContent='Bad JSON from server'; 
               return; 
             }
-            
             var orders = data.orders || [];
-            var newRows = convertShopifyOrdersToRows(orders);
-            rows = rows.concat(newRows);
-            totalFetched += orders.length;
-            
-            // Update status with progress
-            status.textContent='🔄 Fetched '+totalFetched+' orders ('+rows.length+' line items)' + (data.next_page_info ? ' - Loading more...' : ' - Complete!');
-            
-            // Update display with current data
-            if (rows.length > 0) {
-              buildHead(); 
-              applyFilters();
-            }
-            
-            // Continue fetching if there are more pages
-            if (data.next_page_info) {
-              nextPageInfo = data.next_page_info;
-              // Small delay to prevent overwhelming the API
-              setTimeout(function() {
-                fetchAllOrdersRecursively(data.next_page_info, totalFetched);
-              }, 200);
-            } else {
-              // All done!
-              nextPageInfo = null;
-              status.textContent='✅ Loaded ALL '+totalFetched+' orders ('+rows.length+' line items)';
-              fetchBtn.disabled = false;
-              fetchBtn.textContent = 'Fetch from Shopify';
-            }
+            nextPageInfo = data.next_page_info;
+            rows = convertShopifyOrdersToRows(orders);
+            status.textContent='✅ Loaded '+orders.length+' orders ('+rows.length+' line items)';
+            buildHead(); 
+            applyFilters();
           })
           .catch(function(err){ 
             console.error('Fetch error:', err); 
-            status.textContent='❌ Network error: ' + err.message;
+            status.textContent='❌ Network error: ' + err.message; 
+          })
+          .finally(function(){
             fetchBtn.disabled = false;
             fetchBtn.textContent = 'Fetch from Shopify';
           });
@@ -2803,10 +2320,246 @@ def get_shopify_config():
         "last_updated": SHOPIFY_CACHE.get("last_updated")
     })
 
+# -------------------- USER MANAGEMENT API --------------------
+@app.get("/api/users/stats")
+def get_users_stats():
+    """Get user statistics for dashboard."""
+    return JSONResponse(content=get_user_stats())
+
+@app.get("/api/users")
+def get_users(
+    search: str = "",
+    role: str = "",
+    status: str = "",
+    sort_by: str = "name",
+    sort_dir: str = "asc"
+):
+    """Get filtered and sorted user list."""
+    users = list(USERS_DATABASE.values())
+    
+    # Apply filters
+    if search:
+        search = search.lower()
+        users = [u for u in users if search in u["name"].lower() or search in u["email"].lower() or search in u["id"].lower()]
+    
+    if role:
+        users = [u for u in users if u["role"] == role]
+    
+    if status:
+        users = [u for u in users if u["status"] == status]
+    
+    # Apply sorting
+    reverse = sort_dir == "desc"
+    if sort_by == "name":
+        users.sort(key=lambda x: x["name"], reverse=reverse)
+    elif sort_by == "role":
+        users.sort(key=lambda x: x["role"], reverse=reverse)
+    elif sort_by == "status":
+        users.sort(key=lambda x: x["status"], reverse=reverse)
+    elif sort_by == "last_login":
+        users.sort(key=lambda x: x["last_login"], reverse=reverse)
+    elif sort_by == "login_count":
+        users.sort(key=lambda x: x["login_count"], reverse=reverse)
+    
+    return JSONResponse(content={
+        "users": users,
+        "total": len(users),
+        "roles": list(ROLE_DEFINITIONS.keys()),
+        "permissions": PERMISSION_DEFINITIONS
+    })
+
+@app.post("/api/users/{user_id}/toggle-status")
+def toggle_user_status(user_id: str, admin_user: str = "EMP001"):
+    """Toggle user active/inactive status."""
+    if user_id not in USERS_DATABASE:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user = USERS_DATABASE[user_id]
+    old_status = user["status"]
+    new_status = "inactive" if old_status == "active" else "active"
+    
+    user["status"] = new_status
+    
+    # Clear session if deactivating
+    if new_status == "inactive":
+        user["session_id"] = None
+    
+    # Log audit trail
+    log_audit_trail(admin_user, user_id, "status_change", old_status, new_status)
+    log_user_activity(user_id, "status_changed", f"Status changed from {old_status} to {new_status}")
+    
+    return JSONResponse(content={
+        "success": True,
+        "user_id": user_id,
+        "old_status": old_status,
+        "new_status": new_status
+    })
+
+@app.post("/api/users/{user_id}/change-role")
+def change_user_role(user_id: str, role_data: dict, admin_user: str = "EMP001"):
+    """Change user role and permissions."""
+    if user_id not in USERS_DATABASE:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    new_role = role_data.get("role")
+    if new_role not in ROLE_DEFINITIONS:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    
+    user = USERS_DATABASE[user_id]
+    old_role = user["role"]
+    
+    user["role"] = new_role
+    user["permissions"] = ROLE_DEFINITIONS[new_role]["permissions"].copy()
+    
+    # Log audit trail
+    log_audit_trail(admin_user, user_id, "role_change", old_role, new_role)
+    log_user_activity(user_id, "role_changed", f"Role changed from {old_role} to {new_role}")
+    
+    return JSONResponse(content={
+        "success": True,
+        "user_id": user_id,
+        "old_role": old_role,
+        "new_role": new_role,
+        "new_permissions": user["permissions"]
+    })
+
+@app.post("/api/users/{user_id}/update-permissions")
+def update_user_permissions(user_id: str, permission_data: dict, admin_user: str = "EMP001"):
+    """Update user permissions directly."""
+    if user_id not in USERS_DATABASE:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    new_permissions = permission_data.get("permissions", [])
+    user = USERS_DATABASE[user_id]
+    old_permissions = user["permissions"].copy()
+    
+    user["permissions"] = new_permissions
+    
+    # Log audit trail
+    log_audit_trail(admin_user, user_id, "permissions_change", str(old_permissions), str(new_permissions))
+    log_user_activity(user_id, "permissions_updated", f"Permissions updated")
+    
+    return JSONResponse(content={
+        "success": True,
+        "user_id": user_id,
+        "old_permissions": old_permissions,
+        "new_permissions": new_permissions
+    })
+
+@app.post("/api/roles/create")
+def create_role(role_data: dict, admin_user: str = "EMP001"):
+    """Create a new role with custom permissions."""
+    role_name = role_data.get("name", "").strip()
+    role_description = role_data.get("description", "").strip()
+    role_permissions = role_data.get("permissions", [])
+    role_color = role_data.get("color", "#6b7280")
+    
+    if not role_name:
+        raise HTTPException(status_code=400, detail="Role name is required")
+    
+    if role_name in ROLE_DEFINITIONS:
+        raise HTTPException(status_code=400, detail="Role already exists")
+    
+    # Validate permissions
+    valid_permissions = set(PERMISSION_DEFINITIONS.keys())
+    if not all(perm in valid_permissions for perm in role_permissions):
+        raise HTTPException(status_code=400, detail="Invalid permissions specified")
+    
+    ROLE_DEFINITIONS[role_name] = {
+        "name": role_name,
+        "description": role_description,
+        "permissions": role_permissions,
+        "color": role_color,
+        "custom": True  # Mark as custom role
+    }
+    
+    # Log audit trail
+    log_audit_trail(admin_user, "SYSTEM", "role_created", "", f"Created role: {role_name}")
+    
+    return JSONResponse(content={
+        "success": True,
+        "role": ROLE_DEFINITIONS[role_name]
+    })
+
+@app.put("/api/roles/{role_name}")
+def update_role(role_name: str, role_data: dict, admin_user: str = "EMP001"):
+    """Update an existing role."""
+    if role_name not in ROLE_DEFINITIONS:
+        raise HTTPException(status_code=404, detail="Role not found")
+    
+    # Prevent editing system roles (only custom roles can be fully edited)
+    role = ROLE_DEFINITIONS[role_name]
+    if not role.get("custom", False):
+        raise HTTPException(status_code=400, detail="Cannot modify system roles")
+    
+    old_role = role.copy()
+    
+    # Update role properties
+    if "description" in role_data:
+        role["description"] = role_data["description"].strip()
+    if "permissions" in role_data:
+        # Validate permissions
+        valid_permissions = set(PERMISSION_DEFINITIONS.keys())
+        if not all(perm in valid_permissions for perm in role_data["permissions"]):
+            raise HTTPException(status_code=400, detail="Invalid permissions specified")
+        role["permissions"] = role_data["permissions"]
+    if "color" in role_data:
+        role["color"] = role_data["color"]
+    
+    # Update all users with this role
+    updated_users = []
+    for user_id, user in USERS_DATABASE.items():
+        if user["role"] == role_name:
+            user["permissions"] = role["permissions"].copy()
+            updated_users.append(user_id)
+    
+    # Log audit trail
+    log_audit_trail(admin_user, "SYSTEM", "role_updated", str(old_role), str(role))
+    
+    return JSONResponse(content={
+        "success": True,
+        "role": role,
+        "updated_users": updated_users
+    })
+
+@app.delete("/api/roles/{role_name}")
+def delete_role(role_name: str, admin_user: str = "EMP001"):
+    """Delete a custom role."""
+    if role_name not in ROLE_DEFINITIONS:
+        raise HTTPException(status_code=404, detail="Role not found")
+    
+    role = ROLE_DEFINITIONS[role_name]
+    if not role.get("custom", False):
+        raise HTTPException(status_code=400, detail="Cannot delete system roles")
+    
+    # Check if any users have this role
+    users_with_role = [user_id for user_id, user in USERS_DATABASE.items() if user["role"] == role_name]
+    if users_with_role:
+        raise HTTPException(status_code=400, detail=f"Cannot delete role: {len(users_with_role)} users still have this role")
+    
+    # Delete the role
+    deleted_role = ROLE_DEFINITIONS.pop(role_name)
+    
+    # Log audit trail
+    log_audit_trail(admin_user, "SYSTEM", "role_deleted", str(deleted_role), "")
+    
+    return JSONResponse(content={
+        "success": True,
+        "deleted_role": role_name
+    })
+
+@app.get("/api/roles")
+def get_roles():
+    """Get all available roles and their definitions."""
+    return JSONResponse(content={
+        "roles": ROLE_DEFINITIONS,
+        "permissions": PERMISSION_DEFINITIONS
+    })
+
 @app.get("/api/shopify/orders")
 def api_shopify_orders(
     status: str = "any",
-    limit: int = 250,  # Default to maximum for efficiency
+    limit: int = 100,
     page_info: str = None,
     created_at_min: str = None,
     created_at_max: str = None
@@ -3707,6 +3460,1021 @@ def shopify_settings_page():
     </script>
     """
     return _eraya_lumen_page("Shopify Settings", body)
+
+@app.get("/admin/users")
+def user_management_page():
+    body = """
+    <section class="glass p-6">
+      <h1 class="text-3xl font-bold mb-2">👨‍💼 User Management</h1>
+      <p class="text-white/80 mb-6">Manage user accounts, roles, permissions, and monitor activity across your system.</p>
+      
+      <!-- User Statistics Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6" id="userStatsCards">
+        <!-- Will be populated by JavaScript -->
+      </div>
+      
+      <!-- Action Bar -->
+      <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
+        <div class="flex flex-wrap items-center gap-3">
+          <input type="text" id="searchUsers" placeholder="Search users..." class="rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2 text-sm min-w-[200px]">
+          <select id="filterRole" class="rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2 text-sm">
+            <option value="">All Roles</option>
+          </select>
+          <select id="filterStatus" class="rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2 text-sm">
+            <option value="">All Status</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <button id="bulkActivate" class="btn btn-sm btn-success" disabled>Activate Selected</button>
+          <button id="bulkDeactivate" class="btn btn-sm btn-warning" disabled>Deactivate Selected</button>
+          <button id="manageRoles" class="btn btn-sm btn-accent">🎭 Manage Roles</button>
+          <button id="refreshUsers" class="btn btn-sm btn-secondary">🔄 Refresh</button>
+        </div>
+      </div>
+      
+      <!-- Selection Info -->
+      <div id="selectionInfo" class="mb-4 text-sm text-white/60" style="display: none;">
+        <span id="selectedCount">0</span> users selected
+      </div>
+      
+      <!-- Users Table -->
+      <div class="glass overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full" id="usersTable">
+            <thead>
+              <tr class="bg-slate-900/50">
+                <th class="text-left p-4 border-b border-white/10">
+                  <input type="checkbox" id="selectAllUsers" class="rounded">
+                </th>
+                <th class="text-left p-4 border-b border-white/10 cursor-pointer" data-sort="name">Name ↕️</th>
+                <th class="text-left p-4 border-b border-white/10 cursor-pointer" data-sort="role">Role ↕️</th>
+                <th class="text-left p-4 border-b border-white/10 cursor-pointer" data-sort="status">Status ↕️</th>
+                <th class="text-left p-4 border-b border-white/10 cursor-pointer" data-sort="last_login">Last Login ↕️</th>
+                <th class="text-left p-4 border-b border-white/10">Session</th>
+                <th class="text-left p-4 border-b border-white/10">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="usersTableBody">
+              <!-- Will be populated by JavaScript -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+      
+      <!-- Loading State -->
+      <div id="loadingUsers" class="text-center py-8">
+        <div class="animate-spin inline-block w-6 h-6 border-[3px] border-current border-t-transparent text-blue-600 rounded-full"></div>
+        <p class="mt-2 text-white/60">Loading users...</p>
+      </div>
+      
+      <!-- No Users State -->
+      <div id="noUsers" class="text-center py-8" style="display: none;">
+        <p class="text-white/60">No users found matching your criteria.</p>
+      </div>
+    </section>
+
+    <!-- User Details Modal -->
+    <div id="userModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 hidden items-center justify-center p-4">
+      <div class="glass max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+        <div class="p-6">
+          <div class="flex items-center justify-between mb-6">
+            <h2 class="text-2xl font-bold" id="modalTitle">User Details</h2>
+            <button id="closeModal" class="text-white/60 hover:text-white text-2xl">&times;</button>
+          </div>
+          
+          <!-- User Profile Section -->
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- User Info -->
+            <div class="lg:col-span-1">
+              <div class="text-center mb-6">
+                <img id="modalUserPhoto" src="" alt="User Photo" class="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-white/20">
+                <h3 id="modalUserName" class="text-xl font-bold"></h3>
+                <p id="modalUserEmail" class="text-white/60"></p>
+                <div id="modalUserStatus" class="mt-2"></div>
+              </div>
+              
+              <!-- Quick Actions -->
+              <div class="space-y-3">
+                <button id="toggleUserStatus" class="btn btn-primary w-full">Toggle Status</button>
+                <select id="changeUserRole" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2">
+                  <!-- Will be populated -->
+                </select>
+                <button id="viewUserActivity" class="btn btn-secondary w-full">View Activity Log</button>
+              </div>
+            </div>
+            
+            <!-- Permissions Matrix -->
+            <div class="lg:col-span-2">
+              <div class="flex items-center justify-between mb-4">
+                <h4 class="text-lg font-semibold">Permissions</h4>
+                <div class="flex gap-2">
+                  <button id="editPermissions" class="btn btn-sm btn-accent">✏️ Edit Permissions</button>
+                  <button id="savePermissions" class="btn btn-sm btn-success" style="display: none;">💾 Save Changes</button>
+                  <button id="cancelPermissions" class="btn btn-sm btn-secondary" style="display: none;">❌ Cancel</button>
+                </div>
+              </div>
+              
+              <div id="permissionsMatrix" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <!-- Will be populated by JavaScript -->
+              </div>
+              
+              <!-- Permission Edit Mode Notice -->
+              <div id="editModeNotice" class="mt-4 p-3 bg-blue-500/20 border border-blue-500/30 rounded-lg text-sm text-blue-200" style="display: none;">
+                <strong>Edit Mode:</strong> Click on permission cards to toggle them on/off. Changes will override the user's role-based permissions.
+              </div>
+              
+              <!-- User Activity Preview -->
+              <div class="mt-6">
+                <h4 class="text-lg font-semibold mb-4">Recent Activity</h4>
+                <div id="recentActivity" class="space-y-2 max-h-40 overflow-y-auto">
+                  <!-- Will be populated by JavaScript -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Role Management Modal -->
+    <div id="roleModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 hidden items-center justify-center p-4">
+      <div class="glass max-w-6xl w-full max-h-[90vh] overflow-y-auto">
+        <div class="p-6">
+          <div class="flex items-center justify-between mb-6">
+            <h2 class="text-2xl font-bold">🎭 Role Management</h2>
+            <button id="closeRoleModal" class="text-white/60 hover:text-white text-2xl">&times;</button>
+          </div>
+          
+          <!-- Role Actions -->
+          <div class="flex flex-wrap gap-3 mb-6">
+            <button id="createNewRole" class="btn btn-success">➕ Create New Role</button>
+            <button id="refreshRoles" class="btn btn-secondary">🔄 Refresh</button>
+          </div>
+          
+          <!-- Roles Grid -->
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="rolesGrid">
+            <!-- Will be populated by JavaScript -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Role Create/Edit Modal -->
+    <div id="roleEditModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] hidden items-center justify-center p-4">
+      <div class="glass max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div class="p-6">
+          <div class="flex items-center justify-between mb-6">
+            <h2 class="text-2xl font-bold" id="roleEditTitle">Create New Role</h2>
+            <button id="closeRoleEditModal" class="text-white/60 hover:text-white text-2xl">&times;</button>
+          </div>
+          
+          <!-- Role Form -->
+          <form id="roleForm" class="space-y-4">
+            <div>
+              <label class="block text-sm font-semibold mb-2">Role Name</label>
+              <input type="text" id="roleName" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="Enter role name" required>
+            </div>
+            
+            <div>
+              <label class="block text-sm font-semibold mb-2">Description</label>
+              <textarea id="roleDescription" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" rows="3" placeholder="Describe this role's purpose"></textarea>
+            </div>
+            
+            <div>
+              <label class="block text-sm font-semibold mb-2">Role Color</label>
+              <div class="flex items-center gap-3">
+                <input type="color" id="roleColor" class="w-12 h-10 rounded border border-white/10" value="#6b7280">
+                <span class="text-sm text-white/60">Choose a color to represent this role</span>
+              </div>
+            </div>
+            
+            <div>
+              <label class="block text-sm font-semibold mb-4">Permissions</label>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3" id="rolePermissionsGrid">
+                <!-- Will be populated by JavaScript -->
+              </div>
+            </div>
+            
+            <div class="flex gap-3 pt-4">
+              <button type="submit" class="btn btn-success flex-1">💾 Save Role</button>
+              <button type="button" id="cancelRoleEdit" class="btn btn-secondary">❌ Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+    
+    <style>
+      .user-card { transition: all 0.2s ease; }
+      .user-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.3); }
+      .status-active { background: linear-gradient(135deg, #10b981, #059669); }
+      .status-inactive { background: linear-gradient(135deg, #ef4444, #dc2626); }
+      .role-badge { padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
+      .role-super-admin { background: #4f46e5; color: white; }
+      .role-admin { background: #059669; color: white; }
+      .role-manager { background: #dc2626; color: white; }
+      .role-employee { background: #7c3aed; color: white; }
+      .session-online { color: #10b981; }
+      .session-offline { color: #6b7280; }
+      .btn-success { background: linear-gradient(135deg, #10b981, #059669); }
+      .btn-warning { background: linear-gradient(135deg, #f59e0b, #d97706); }
+      .btn-danger { background: linear-gradient(135deg, #ef4444, #dc2626); }
+      .permission-enabled { background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; }
+      .permission-disabled { background: rgba(107, 114, 128, 0.2); border: 1px solid #6b7280; }
+      .permission-editable { cursor: pointer; transition: all 0.2s ease; }
+      .permission-editable:hover { transform: scale(1.02); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+      .role-card { transition: all 0.2s ease; cursor: pointer; }
+      .role-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.3); }
+      .role-system { border: 2px solid #6b7280; }
+      .role-custom { border: 2px solid #8b5cf6; }
+      .permission-toggle { transition: all 0.2s ease; }
+      .permission-toggle.active { background: rgba(16, 185, 129, 0.3); border-color: #10b981; }
+      .permission-toggle.inactive { background: rgba(107, 114, 128, 0.2); border-color: #6b7280; }
+      tbody tr:hover { background-color: rgba(255,255,255,0.05); }
+      .selected-row { background-color: rgba(59, 130, 246, 0.2) !important; }
+    </style>
+
+    <script>
+      // Global variables
+      let allUsers = [];
+      let selectedUsers = new Set();
+      let currentSort = { field: 'name', direction: 'asc' };
+      let currentModal = null;
+      let editingPermissions = false;
+      let originalPermissions = [];
+      let allRoles = {};
+      let allPermissions = {};
+      let currentEditingRole = null;
+      
+      // DOM elements
+      const searchInput = document.getElementById('searchUsers');
+      const roleFilter = document.getElementById('filterRole');
+      const statusFilter = document.getElementById('filterStatus');
+      const usersTableBody = document.getElementById('usersTableBody');
+      const loadingUsers = document.getElementById('loadingUsers');
+      const noUsers = document.getElementById('noUsers');
+      const selectAllCheckbox = document.getElementById('selectAllUsers');
+      const bulkActivateBtn = document.getElementById('bulkActivate');
+      const bulkDeactivateBtn = document.getElementById('bulkDeactivate');
+      const refreshBtn = document.getElementById('refreshUsers');
+      const selectionInfo = document.getElementById('selectionInfo');
+      const selectedCount = document.getElementById('selectedCount');
+      const userModal = document.getElementById('userModal');
+      const closeModalBtn = document.getElementById('closeModal');
+      const manageRolesBtn = document.getElementById('manageRoles');
+      const roleModal = document.getElementById('roleModal');
+      const closeRoleModalBtn = document.getElementById('closeRoleModal');
+      const roleEditModal = document.getElementById('roleEditModal');
+      const closeRoleEditModalBtn = document.getElementById('closeRoleEditModal');
+      const editPermissionsBtn = document.getElementById('editPermissions');
+      const savePermissionsBtn = document.getElementById('savePermissions');
+      const cancelPermissionsBtn = document.getElementById('cancelPermissions');
+      
+      // Initialize page
+      document.addEventListener('DOMContentLoaded', function() {
+        loadUserStats();
+        loadUsers();
+        setupEventListeners();
+      });
+      
+      function setupEventListeners() {
+        // Search and filters
+        searchInput.addEventListener('input', debounce(filterUsers, 300));
+        roleFilter.addEventListener('change', filterUsers);
+        statusFilter.addEventListener('change', filterUsers);
+        
+        // Bulk actions
+        bulkActivateBtn.addEventListener('click', () => performBulkAction('activate'));
+        bulkDeactivateBtn.addEventListener('click', () => performBulkAction('deactivate'));
+        refreshBtn.addEventListener('click', loadUsers);
+        
+        // Select all checkbox
+        selectAllCheckbox.addEventListener('change', toggleSelectAll);
+        
+        // Table sorting
+        document.querySelectorAll('th[data-sort]').forEach(th => {
+          th.addEventListener('click', () => sortUsers(th.dataset.sort));
+        });
+        
+        // Modal
+        closeModalBtn.addEventListener('click', closeModal);
+        userModal.addEventListener('click', (e) => {
+          if (e.target === userModal) closeModal();
+        });
+        
+        // Role Management
+        manageRolesBtn.addEventListener('click', openRoleModal);
+        closeRoleModalBtn.addEventListener('click', closeRoleModal);
+        roleModal.addEventListener('click', (e) => {
+          if (e.target === roleModal) closeRoleModal();
+        });
+        
+        // Permission Editing
+        editPermissionsBtn.addEventListener('click', enterEditMode);
+        savePermissionsBtn.addEventListener('click', savePermissions);
+        cancelPermissionsBtn.addEventListener('click', cancelEditMode);
+        
+        // Role Edit Modal
+        closeRoleEditModalBtn.addEventListener('click', closeRoleEditModal);
+        document.getElementById('cancelRoleEdit').addEventListener('click', closeRoleEditModal);
+        document.getElementById('roleForm').addEventListener('submit', saveRole);
+      }
+      
+      async function loadUserStats() {
+        try {
+          const response = await fetch('/api/users/stats');
+          const stats = await response.json();
+          
+          document.getElementById('userStatsCards').innerHTML = `
+            <div class="glass p-4 text-center user-card">
+              <div class="text-2xl font-bold text-blue-400">${stats.total_users}</div>
+              <div class="text-sm text-white/60">Total Users</div>
+            </div>
+            <div class="glass p-4 text-center user-card">
+              <div class="text-2xl font-bold text-green-400">${stats.active_users}</div>
+              <div class="text-sm text-white/60">Active Users</div>
+            </div>
+            <div class="glass p-4 text-center user-card">
+              <div class="text-2xl font-bold text-red-400">${stats.inactive_users}</div>
+              <div class="text-sm text-white/60">Inactive Users</div>
+            </div>
+            <div class="glass p-4 text-center user-card">
+              <div class="text-2xl font-bold text-purple-400">${stats.admin_count}</div>
+              <div class="text-sm text-white/60">Administrators</div>
+            </div>
+          `;
+        } catch (error) {
+          console.error('Failed to load user stats:', error);
+        }
+      }
+      
+      async function loadUsers() {
+        loadingUsers.style.display = 'block';
+        usersTableBody.style.display = 'none';
+        noUsers.style.display = 'none';
+        
+        try {
+          const response = await fetch('/api/users');
+          const data = await response.json();
+          
+          allUsers = data.users;
+          
+          // Populate role filter
+          roleFilter.innerHTML = '<option value="">All Roles</option>';
+          data.roles.forEach(role => {
+            roleFilter.innerHTML += `<option value="${role}">${role}</option>`;
+          });
+          
+          filterUsers();
+          
+        } catch (error) {
+          console.error('Failed to load users:', error);
+          loadingUsers.style.display = 'none';
+          usersTableBody.innerHTML = '<tr><td colspan="7" class="text-center p-4 text-red-400">Failed to load users</td></tr>';
+          usersTableBody.style.display = 'table-row-group';
+        }
+      }
+      
+      function filterUsers() {
+        loadingUsers.style.display = 'none';
+        
+        const searchTerm = searchInput.value.toLowerCase();
+        const roleFilterValue = roleFilter.value;
+        const statusFilterValue = statusFilter.value;
+        
+        let filteredUsers = allUsers.filter(user => {
+          const matchesSearch = !searchTerm || 
+            user.name.toLowerCase().includes(searchTerm) ||
+            user.email.toLowerCase().includes(searchTerm) ||
+            user.id.toLowerCase().includes(searchTerm);
+          
+          const matchesRole = !roleFilterValue || user.role === roleFilterValue;
+          const matchesStatus = !statusFilterValue || user.status === statusFilterValue;
+          
+          return matchesSearch && matchesRole && matchesStatus;
+        });
+        
+        // Apply sorting
+        filteredUsers.sort((a, b) => {
+          let aVal = a[currentSort.field];
+          let bVal = b[currentSort.field];
+          
+          if (currentSort.field === 'last_login') {
+            aVal = new Date(aVal);
+            bVal = new Date(bVal);
+          }
+          
+          if (aVal < bVal) return currentSort.direction === 'asc' ? -1 : 1;
+          if (aVal > bVal) return currentSort.direction === 'asc' ? 1 : -1;
+          return 0;
+        });
+        
+        renderUsers(filteredUsers);
+      }
+      
+      function renderUsers(users) {
+        if (users.length === 0) {
+          usersTableBody.style.display = 'none';
+          noUsers.style.display = 'block';
+          return;
+        }
+        
+        noUsers.style.display = 'none';
+        usersTableBody.style.display = 'table-row-group';
+        
+        usersTableBody.innerHTML = users.map(user => {
+          const isSelected = selectedUsers.has(user.id);
+          const statusClass = user.status === 'active' ? 'status-active' : 'status-inactive';
+          const roleClass = `role-${user.role.toLowerCase().replace(' ', '-')}`;
+          const sessionStatus = user.session_id ? 'Online' : 'Offline';
+          const sessionClass = user.session_id ? 'session-online' : 'session-offline';
+          
+          return `
+            <tr class="${isSelected ? 'selected-row' : ''}" data-user-id="${user.id}">
+              <td class="p-4 border-b border-white/10">
+                <input type="checkbox" class="user-checkbox rounded" data-user-id="${user.id}" ${isSelected ? 'checked' : ''}>
+              </td>
+              <td class="p-4 border-b border-white/10">
+                <div class="flex items-center gap-3">
+                  <img src="${user.photo}" alt="${user.name}" class="w-10 h-10 rounded-full border-2 border-white/20">
+                  <div>
+                    <div class="font-semibold">${user.name}</div>
+                    <div class="text-sm text-white/60">${user.email}</div>
+                    <div class="text-xs text-white/40">${user.id}</div>
+                  </div>
+                </div>
+              </td>
+              <td class="p-4 border-b border-white/10">
+                <span class="role-badge ${roleClass}">${user.role}</span>
+              </td>
+              <td class="p-4 border-b border-white/10">
+                <span class="px-3 py-1 rounded-full text-xs font-semibold text-white ${statusClass}">
+                  ${user.status.charAt(0).toUpperCase() + user.status.slice(1)}
+                </span>
+              </td>
+              <td class="p-4 border-b border-white/10">
+                <div class="text-sm">${formatDateTime(user.last_login)}</div>
+                <div class="text-xs text-white/60">${user.login_count} logins</div>
+              </td>
+              <td class="p-4 border-b border-white/10">
+                <span class="text-sm ${sessionClass}">${sessionStatus}</span>
+              </td>
+              <td class="p-4 border-b border-white/10">
+                <div class="flex gap-2">
+                  <button class="btn btn-sm btn-primary" onclick="openUserModal('${user.id}')">Details</button>
+                  <button class="btn btn-sm ${user.status === 'active' ? 'btn-warning' : 'btn-success'}" 
+                          onclick="toggleUserStatus('${user.id}')">
+                    ${user.status === 'active' ? 'Deactivate' : 'Activate'}
+                  </button>
+                </div>
+              </td>
+            </tr>
+          `;
+        }).join('');
+        
+        // Add event listeners to checkboxes
+        document.querySelectorAll('.user-checkbox').forEach(checkbox => {
+          checkbox.addEventListener('change', handleUserSelection);
+        });
+        
+        updateSelectionUI();
+      }
+      
+      function handleUserSelection(e) {
+        const userId = e.target.dataset.userId;
+        const row = e.target.closest('tr');
+        
+        if (e.target.checked) {
+          selectedUsers.add(userId);
+          row.classList.add('selected-row');
+        } else {
+          selectedUsers.delete(userId);
+          row.classList.remove('selected-row');
+        }
+        
+        updateSelectionUI();
+      }
+      
+      function toggleSelectAll() {
+        const visibleUsers = Array.from(document.querySelectorAll('.user-checkbox'));
+        
+        if (selectAllCheckbox.checked) {
+          visibleUsers.forEach(checkbox => {
+            checkbox.checked = true;
+            selectedUsers.add(checkbox.dataset.userId);
+            checkbox.closest('tr').classList.add('selected-row');
+          });
+        } else {
+          visibleUsers.forEach(checkbox => {
+            checkbox.checked = false;
+            selectedUsers.delete(checkbox.dataset.userId);
+            checkbox.closest('tr').classList.remove('selected-row');
+          });
+        }
+        
+        updateSelectionUI();
+      }
+      
+      function updateSelectionUI() {
+        const count = selectedUsers.size;
+        selectedCount.textContent = count;
+        
+        if (count > 0) {
+          selectionInfo.style.display = 'block';
+          bulkActivateBtn.disabled = false;
+          bulkDeactivateBtn.disabled = false;
+        } else {
+          selectionInfo.style.display = 'none';
+          bulkActivateBtn.disabled = true;
+          bulkDeactivateBtn.disabled = true;
+        }
+        
+        // Update select all checkbox
+        const visibleCheckboxes = document.querySelectorAll('.user-checkbox');
+        const checkedCheckboxes = document.querySelectorAll('.user-checkbox:checked');
+        selectAllCheckbox.indeterminate = checkedCheckboxes.length > 0 && checkedCheckboxes.length < visibleCheckboxes.length;
+        selectAllCheckbox.checked = visibleCheckboxes.length > 0 && checkedCheckboxes.length === visibleCheckboxes.length;
+      }
+      
+      async function toggleUserStatus(userId) {
+        try {
+                        const response = await fetch(`/api/users/${userId}/toggle-status`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          
+          if (response.ok) {
+            await loadUsers();
+            await loadUserStats();
+          } else {
+            throw new Error('Failed to toggle user status');
+          }
+        } catch (error) {
+          alert('Failed to toggle user status: ' + error.message);
+        }
+      }
+      
+      async function performBulkAction(action) {
+        if (selectedUsers.size === 0) return;
+        
+        const userIds = Array.from(selectedUsers);
+        const actionText = action === 'activate' ? 'activate' : 'deactivate';
+        
+        if (!confirm(`Are you sure you want to ${actionText} ${userIds.length} user(s)?`)) {
+          return;
+        }
+        
+        try {
+          const response = await fetch('/api/users/bulk-action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              user_ids: userIds,
+              action: action
+            })
+          });
+          
+          if (response.ok) {
+            selectedUsers.clear();
+            await loadUsers();
+            await loadUserStats();
+          } else {
+            throw new Error(`Failed to ${actionText} users`);
+          }
+        } catch (error) {
+          alert(`Failed to ${actionText} users: ` + error.message);
+        }
+      }
+      
+      function sortUsers(field) {
+        if (currentSort.field === field) {
+          currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+          currentSort.field = field;
+          currentSort.direction = 'asc';
+        }
+        
+        // Update sort indicators
+        document.querySelectorAll('th[data-sort]').forEach(th => {
+          th.innerHTML = th.innerHTML.replace(/[↑↓]/g, '') + ' ↕️';
+        });
+        
+        const currentTh = document.querySelector(`th[data-sort="${field}"]`);
+        currentTh.innerHTML = currentTh.innerHTML.replace('↕️', currentSort.direction === 'asc' ? '↑' : '↓');
+        
+        filterUsers();
+      }
+      
+      async function openUserModal(userId) {
+        const user = allUsers.find(u => u.id === userId);
+        if (!user) return;
+        
+        currentModal = user;
+        
+        // Populate modal with user data
+        document.getElementById('modalTitle').textContent = `User Details - ${user.name}`;
+        document.getElementById('modalUserPhoto').src = user.photo;
+        document.getElementById('modalUserName').textContent = user.name;
+        document.getElementById('modalUserEmail').textContent = user.email;
+        
+        const statusClass = user.status === 'active' ? 'status-active' : 'status-inactive';
+        document.getElementById('modalUserStatus').innerHTML = `
+          <span class="px-3 py-1 rounded-full text-xs font-semibold text-white ${statusClass}">
+            ${user.status.charAt(0).toUpperCase() + user.status.slice(1)}
+          </span>
+        `;
+        
+        // Populate role dropdown
+        try {
+          const rolesResponse = await fetch('/api/roles');
+          const rolesData = await rolesResponse.json();
+          
+          const roleSelect = document.getElementById('changeUserRole');
+          roleSelect.innerHTML = Object.keys(rolesData.roles).map(role => 
+            `<option value="${role}" ${user.role === role ? 'selected' : ''}>${role}</option>`
+          ).join('');
+          
+          // Store permissions data globally
+          allPermissions = rolesData.permissions;
+          
+          // Populate permissions matrix
+          renderPermissionsMatrix(user, false);
+          
+        } catch (error) {
+          console.error('Failed to load roles:', error);
+        }
+        
+        // Show modal
+        userModal.classList.remove('hidden');
+        userModal.classList.add('flex');
+        
+        // Setup modal event listeners
+        document.getElementById('toggleUserStatus').onclick = () => {
+          toggleUserStatus(userId);
+          closeModal();
+        };
+        
+        document.getElementById('changeUserRole').onchange = async (e) => {
+          const newRole = e.target.value;
+          if (newRole !== user.role) {
+            try {
+              const response = await fetch(`/api/users/${userId}/change-role`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ role: newRole })
+              });
+              
+              if (response.ok) {
+                await loadUsers();
+                await loadUserStats();
+                openUserModal(userId); // Refresh modal
+              }
+            } catch (error) {
+              alert('Failed to change user role: ' + error.message);
+            }
+          }
+        };
+      }
+      
+      function closeModal() {
+        userModal.classList.add('hidden');
+        userModal.classList.remove('flex');
+        currentModal = null;
+      }
+      
+      function formatDateTime(dateString) {
+        const date = new Date(dateString);
+        return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+      }
+      
+      function debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+          const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+          };
+          clearTimeout(timeout);
+          timeout = setTimeout(later, wait);
+        };
+      }
+      
+      // Permission Editing Functions
+      function enterEditMode() {
+        editingPermissions = true;
+        originalPermissions = [...currentModal.permissions];
+        
+        // Update UI
+        editPermissionsBtn.style.display = 'none';
+        savePermissionsBtn.style.display = 'inline-block';
+        cancelPermissionsBtn.style.display = 'inline-block';
+        document.getElementById('editModeNotice').style.display = 'block';
+        
+        // Make permission cards clickable
+        renderPermissionsMatrix(currentModal, true);
+      }
+      
+      function cancelEditMode() {
+        editingPermissions = false;
+        currentModal.permissions = [...originalPermissions];
+        
+        // Update UI
+        editPermissionsBtn.style.display = 'inline-block';
+        savePermissionsBtn.style.display = 'none';
+        cancelPermissionsBtn.style.display = 'none';
+        document.getElementById('editModeNotice').style.display = 'none';
+        
+        // Restore original permissions display
+        renderPermissionsMatrix(currentModal, false);
+      }
+      
+      async function savePermissions() {
+        try {
+          const response = await fetch(`/api/users/${currentModal.id}/update-permissions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ permissions: currentModal.permissions })
+          });
+          
+          if (response.ok) {
+            editingPermissions = false;
+            editPermissionsBtn.style.display = 'inline-block';
+            savePermissionsBtn.style.display = 'none';
+            cancelPermissionsBtn.style.display = 'none';
+            document.getElementById('editModeNotice').style.display = 'none';
+            
+            await loadUsers();
+            await loadUserStats();
+            renderPermissionsMatrix(currentModal, false);
+            
+            alert('Permissions updated successfully!');
+          } else {
+            throw new Error('Failed to update permissions');
+          }
+        } catch (error) {
+          alert('Failed to save permissions: ' + error.message);
+        }
+      }
+      
+      function renderPermissionsMatrix(user, editable = false) {
+        const permissionsMatrix = document.getElementById('permissionsMatrix');
+        
+        permissionsMatrix.innerHTML = Object.entries(allPermissions).map(([key, perm]) => {
+          const isEnabled = user.permissions.includes(key) || user.permissions.includes('all');
+          const enabledClass = isEnabled ? 'permission-enabled' : 'permission-disabled';
+          const editableClass = editable ? 'permission-editable' : '';
+          const clickHandler = editable ? `onclick="togglePermission('${key}')"` : '';
+          
+          return `
+            <div class="p-3 rounded-lg border ${enabledClass} ${editableClass}" ${clickHandler}>
+              <div class="font-semibold text-sm">${perm.name}</div>
+              <div class="text-xs text-white/60 mt-1">${perm.description}</div>
+              <div class="text-xs mt-1 ${isEnabled ? 'text-green-400' : 'text-gray-400'}">
+                ${isEnabled ? '✓ Enabled' : '✗ Disabled'}
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+      
+      function togglePermission(permissionKey) {
+        if (!editingPermissions) return;
+        
+        const permissions = currentModal.permissions;
+        const index = permissions.indexOf(permissionKey);
+        
+        if (index > -1) {
+          permissions.splice(index, 1);
+        } else {
+          permissions.push(permissionKey);
+        }
+        
+        // Remove 'all' if it exists when toggling individual permissions
+        const allIndex = permissions.indexOf('all');
+        if (allIndex > -1 && permissionKey !== 'all') {
+          permissions.splice(allIndex, 1);
+        }
+        
+        renderPermissionsMatrix(currentModal, true);
+      }
+      
+      // Role Management Functions
+      async function openRoleModal() {
+        try {
+          const response = await fetch('/api/roles');
+          const data = await response.json();
+          
+          allRoles = data.roles;
+          allPermissions = data.permissions;
+          
+          renderRolesGrid();
+          
+          roleModal.classList.remove('hidden');
+          roleModal.classList.add('flex');
+          
+          // Setup event listeners for role actions
+          document.getElementById('createNewRole').onclick = () => openRoleEditModal();
+          document.getElementById('refreshRoles').onclick = () => {
+            openRoleModal(); // Refresh
+          };
+          
+        } catch (error) {
+          alert('Failed to load roles: ' + error.message);
+        }
+      }
+      
+      function closeRoleModal() {
+        roleModal.classList.add('hidden');
+        roleModal.classList.remove('flex');
+      }
+      
+      function renderRolesGrid() {
+        const rolesGrid = document.getElementById('rolesGrid');
+        
+        rolesGrid.innerHTML = Object.entries(allRoles).map(([roleName, role]) => {
+          const isCustom = role.custom || false;
+          const cardClass = isCustom ? 'role-custom' : 'role-system';
+          const userCount = allUsers.filter(u => u.role === roleName).length;
+          
+          return `
+            <div class="glass p-4 role-card ${cardClass}" style="border-left: 4px solid ${role.color}">
+              <div class="flex items-center justify-between mb-3">
+                <h3 class="font-bold text-lg">${role.name}</h3>
+                <span class="text-xs px-2 py-1 rounded ${isCustom ? 'bg-purple-500/20 text-purple-300' : 'bg-gray-500/20 text-gray-300'}">
+                  ${isCustom ? 'Custom' : 'System'}
+                </span>
+              </div>
+              
+              <p class="text-sm text-white/70 mb-3">${role.description}</p>
+              
+              <div class="text-xs text-white/60 mb-3">
+                <strong>${role.permissions.length}</strong> permissions • <strong>${userCount}</strong> users
+              </div>
+              
+              <div class="flex gap-2">
+                <button class="btn btn-sm btn-primary flex-1" onclick="editRole('${roleName}')">
+                  ${isCustom ? '✏️ Edit' : '👁️ View'}
+                </button>
+                ${isCustom ? `<button class="btn btn-sm btn-danger" onclick="deleteRole('${roleName}')">🗑️</button>` : ''}
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+      
+      function openRoleEditModal(roleName = null) {
+        currentEditingRole = roleName;
+        const isEditing = roleName !== null;
+        const role = isEditing ? allRoles[roleName] : null;
+        
+        // Update modal title
+        document.getElementById('roleEditTitle').textContent = isEditing ? `Edit Role: ${roleName}` : 'Create New Role';
+        
+        // Populate form
+        document.getElementById('roleName').value = role ? role.name : '';
+        document.getElementById('roleName').disabled = isEditing && !role?.custom; // Can't rename system roles
+        document.getElementById('roleDescription').value = role ? role.description : '';
+        document.getElementById('roleColor').value = role ? role.color : '#6b7280';
+        
+        // Render permissions grid
+        renderRolePermissionsGrid(role ? role.permissions : []);
+        
+        // Show modal
+        roleEditModal.classList.remove('hidden');
+        roleEditModal.classList.add('flex');
+      }
+      
+      function closeRoleEditModal() {
+        roleEditModal.classList.add('hidden');
+        roleEditModal.classList.remove('flex');
+        currentEditingRole = null;
+      }
+      
+      function renderRolePermissionsGrid(selectedPermissions) {
+        const grid = document.getElementById('rolePermissionsGrid');
+        
+        grid.innerHTML = Object.entries(allPermissions).map(([key, perm]) => {
+          const isSelected = selectedPermissions.includes(key);
+          const toggleClass = isSelected ? 'active' : 'inactive';
+          
+          return `
+            <div class="permission-toggle ${toggleClass} p-3 rounded-lg border cursor-pointer" onclick="toggleRolePermission('${key}')">
+              <div class="flex items-center gap-2">
+                <input type="checkbox" ${isSelected ? 'checked' : ''} readonly>
+                <div>
+                  <div class="font-semibold text-sm">${perm.name}</div>
+                  <div class="text-xs text-white/60">${perm.description}</div>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+      
+      function toggleRolePermission(permissionKey) {
+        const checkbox = event.target.closest('.permission-toggle').querySelector('input[type="checkbox"]');
+        checkbox.checked = !checkbox.checked;
+        
+        const toggle = checkbox.closest('.permission-toggle');
+        if (checkbox.checked) {
+          toggle.classList.add('active');
+          toggle.classList.remove('inactive');
+        } else {
+          toggle.classList.remove('active');
+          toggle.classList.add('inactive');
+        }
+      }
+      
+      async function saveRole(event) {
+        event.preventDefault();
+        
+        const roleName = document.getElementById('roleName').value.trim();
+        const roleDescription = document.getElementById('roleDescription').value.trim();
+        const roleColor = document.getElementById('roleColor').value;
+        
+        // Get selected permissions
+        const selectedPermissions = Array.from(document.querySelectorAll('#rolePermissionsGrid input[type="checkbox"]:checked'))
+          .map(checkbox => {
+            const toggle = checkbox.closest('.permission-toggle');
+            return toggle.onclick.toString().match(/'([^']+)'/)[1];
+          });
+        
+        const roleData = {
+          name: roleName,
+          description: roleDescription,
+          color: roleColor,
+          permissions: selectedPermissions
+        };
+        
+        try {
+          let response;
+          if (currentEditingRole) {
+            // Update existing role
+            response = await fetch(`/api/roles/${currentEditingRole}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(roleData)
+            });
+          } else {
+            // Create new role
+            response = await fetch('/api/roles/create', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(roleData)
+            });
+          }
+          
+          if (response.ok) {
+            closeRoleEditModal();
+            await openRoleModal(); // Refresh roles
+            await loadUsers(); // Refresh users
+            alert(`Role ${currentEditingRole ? 'updated' : 'created'} successfully!`);
+          } else {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to save role');
+          }
+        } catch (error) {
+          alert('Failed to save role: ' + error.message);
+        }
+      }
+      
+      async function editRole(roleName) {
+        openRoleEditModal(roleName);
+      }
+      
+      async function deleteRole(roleName) {
+        if (!confirm(`Are you sure you want to delete the role "${roleName}"?`)) {
+          return;
+        }
+        
+        try {
+          const response = await fetch(`/api/roles/${roleName}`, {
+            method: 'DELETE'
+          });
+          
+          if (response.ok) {
+            await openRoleModal(); // Refresh roles
+            alert('Role deleted successfully!');
+          } else {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to delete role');
+          }
+        } catch (error) {
+          alert('Failed to delete role: ' + error.message);
+        }
+      }
+      
+      // Make functions global for onclick handlers
+      window.togglePermission = togglePermission;
+      window.editRole = editRole;
+      window.deleteRole = deleteRole;
+      window.toggleRolePermission = toggleRolePermission;
+    </script>
+    """
+    
+    return _eraya_lumen_page("User Management", body)
 
 # -------------------- Pending & Attendance placeholders --------------------
 @app.get("/pending")
