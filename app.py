@@ -7,10 +7,13 @@ import urllib.request
 import urllib.parse
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import hashlib
+import secrets
 
 from processor import process_csv_file, extract_color
 
@@ -91,15 +94,76 @@ EMPLOYEES = {
     "Nishant": "EMP006",
 }
 
-# User roles and permissions - ALL USERS GET FULL ACCESS
+# User authentication and roles
+def hash_password(password: str) -> str:
+    """Hash password using SHA-256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# User roles and permissions with authentication
 USER_ROLES = {
-    "EMP001": {"name": "Ritik", "role": "admin", "permissions": ["all"]},
-    "EMP002": {"name": "Sunny", "role": "admin", "permissions": ["all"]},
-    "EMP003": {"name": "Rahul", "role": "admin", "permissions": ["all"]},
-    "EMP004": {"name": "Sumit", "role": "admin", "permissions": ["all"]},
-    "EMP005": {"name": "Vishal", "role": "admin", "permissions": ["all"]},
-    "EMP006": {"name": "Nishant", "role": "admin", "permissions": ["all"]},
+    "EMP001": {"name": "Ritik", "role": "admin", "permissions": ["all"], "password_hash": hash_password("admin123"), "is_active": True},
+    "EMP002": {"name": "Sunny", "role": "manager", "permissions": ["orders", "packing", "attendance", "chat", "reports"], "password_hash": hash_password("sunny123"), "is_active": True},
+    "EMP003": {"name": "Rahul", "role": "employee", "permissions": ["attendance", "chat"], "password_hash": hash_password("rahul123"), "is_active": True},
+    "EMP004": {"name": "Sumit", "role": "employee", "permissions": ["attendance", "chat"], "password_hash": hash_password("sumit123"), "is_active": True},
+    "EMP005": {"name": "Vishal", "role": "employee", "permissions": ["attendance", "chat"], "password_hash": hash_password("vishal123"), "is_active": True},
+    "EMP006": {"name": "Nishant", "role": "manager", "permissions": ["orders", "packing", "attendance", "chat", "reports"], "password_hash": hash_password("nishant123"), "is_active": True},
 }
+
+# Session management
+ACTIVE_SESSIONS = {}  # session_id -> {employee_id, expires_at, created_at}
+
+def create_session(employee_id: str) -> str:
+    """Create a new session for user"""
+    session_id = secrets.token_urlsafe(32)
+    expires_at = datetime.datetime.now() + datetime.timedelta(hours=8)  # 8 hour sessions
+    
+    ACTIVE_SESSIONS[session_id] = {
+        "employee_id": employee_id,
+        "expires_at": expires_at,
+        "created_at": datetime.datetime.now()
+    }
+    return session_id
+
+def get_current_user(request: Request) -> Optional[dict]:
+    """Get current logged-in user from session"""
+    session_id = request.cookies.get("session_id")
+    if not session_id or session_id not in ACTIVE_SESSIONS:
+        return None
+    
+    session = ACTIVE_SESSIONS[session_id]
+    if datetime.datetime.now() > session["expires_at"]:
+        # Session expired
+        del ACTIVE_SESSIONS[session_id]
+        return None
+    
+    employee_id = session["employee_id"]
+    if employee_id not in USER_ROLES or not USER_ROLES[employee_id]["is_active"]:
+        return None
+    
+    user_data = USER_ROLES[employee_id].copy()
+    user_data["employee_id"] = employee_id
+    return user_data
+
+def require_auth(request: Request) -> dict:
+    """Dependency to require authentication"""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required"
+        )
+    return user
+
+def require_permission(permission: str):
+    """Dependency factory to require specific permission"""
+    def check_permission(user: dict = Depends(require_auth)) -> dict:
+        if user["role"] == "admin" or "all" in user["permissions"] or permission in user["permissions"]:
+            return user
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission '{permission}' required"
+        )
+    return check_permission
 
 # Navigation menu structure - EVERYONE GETS FULL ACCESS
 UNIFIED_NAVIGATION_MENU = [
@@ -113,7 +177,7 @@ UNIFIED_NAVIGATION_MENU = [
     {"id": "team", "name": "Team Management", "icon": "👥", "url": "/team", "active": False, "badge": "Soon"},
     {"id": "shopify", "name": "Shopify Settings", "icon": "🛒", "url": "/shopify/settings", "active": True},
     {"id": "settings", "name": "System Settings", "icon": "⚙️", "url": "/admin/settings", "active": False, "badge": "Soon"},
-    {"id": "users", "name": "User Management", "icon": "👨‍💼", "url": "/admin/users", "active": False, "badge": "Soon"},
+    {"id": "users", "name": "User Management", "icon": "👨‍💼", "url": "/admin/users", "active": True},
     {"id": "security", "name": "Security Settings", "icon": "🔐", "url": "/admin/security", "active": False, "badge": "Soon"},
     {"id": "analytics", "name": "System Analytics", "icon": "📈", "url": "/admin/analytics", "active": False, "badge": "Soon"},
 ]
@@ -133,7 +197,7 @@ CHAT_CHANNELS = {
 DIRECT_MESSAGES = {}  # Format: {"EMP001_EMP002": [messages]}
 
 # In-memory store for user online status
-USER_STATUS = {}  # Format: {"EMP001": {"status": "online", "last_seen": timestamp}}
+USER_STATUS = {}  # Format: {"EMP001": {"status": "online", "last_seen": timestamp}
 
 # In-memory store for message reactions
 MESSAGE_REACTIONS = {}
@@ -326,8 +390,547 @@ def run_job(job_id: str, csv_path: Path, out_dir: Path, options: dict):
 
 @app.get("/", response_class=HTMLResponse)
 def root():
-    # Redirect to the hub (dashboard) page instead of showing raw static HTML
-    return RedirectResponse(url="/hub")
+    # Redirect to login page
+    return RedirectResponse(url="/login")
+
+@app.get("/login")
+def login_page(request: Request):
+    # Check if user is already logged in
+    user = get_current_user(request)
+    if user:
+        return RedirectResponse(url="/hub")
+    
+    body = """
+    <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+      <div class="max-w-md w-full space-y-8 p-8">
+        <div class="text-center">
+          <h1 class="text-4xl font-bold text-white mb-2">Eraya Lumen</h1>
+          <h2 class="text-xl text-white/80 mb-8">Employee Login</h2>
+        </div>
+        
+        <div class="glass p-8 rounded-2xl">
+          <form id="loginForm" class="space-y-6">
+            <div>
+              <label class="block text-white/90 text-sm font-medium mb-2">Employee ID</label>
+              <input type="text" id="employeeId" placeholder="EMP001" 
+                     class="w-full px-4 py-3 rounded-xl bg-slate-800/60 border border-white/10 text-white placeholder-white/50 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 outline-none transition-all">
+            </div>
+            
+            <div>
+              <label class="block text-white/90 text-sm font-medium mb-2">Password</label>
+              <input type="password" id="password" placeholder="Enter your password" 
+                     class="w-full px-4 py-3 rounded-xl bg-slate-800/60 border border-white/10 text-white placeholder-white/50 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 outline-none transition-all">
+            </div>
+            
+            <div id="errorMessage" class="text-red-400 text-sm hidden"></div>
+            
+            <button type="submit" id="loginBtn" 
+                    class="w-full bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-semibold py-3 px-4 rounded-xl transition-all transform hover:scale-[1.02] active:scale-[0.98]">
+              Sign In
+            </button>
+          </form>
+          
+          <div class="mt-6 text-center">
+            <div class="text-white/60 text-sm">Default Passwords:</div>
+            <div class="text-white/50 text-xs mt-2">
+              Admin: admin123 | Manager: name123 | Employee: name123
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <style>
+      .glass {
+        background: rgba(255, 255, 255, 0.05);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+    </style>
+    
+    <script>
+      document.getElementById('loginForm').onsubmit = function(e) {
+        e.preventDefault();
+        
+        const employeeId = document.getElementById('employeeId').value.trim();
+        const password = document.getElementById('password').value;
+        const errorDiv = document.getElementById('errorMessage');
+        const loginBtn = document.getElementById('loginBtn');
+        
+        if (!employeeId || !password) {
+          errorDiv.textContent = 'Please enter both Employee ID and Password';
+          errorDiv.classList.remove('hidden');
+          return;
+        }
+        
+        // Clear error and show loading
+        errorDiv.classList.add('hidden');
+        loginBtn.disabled = true;
+        loginBtn.textContent = 'Signing in...';
+        
+        // Send login request
+        fetch('/api/login', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            employee_id: employeeId.toUpperCase(),
+            password: password
+          })
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            // Set cookie and redirect
+            document.cookie = `session_id=$${data.session_id}; path=/; max-age=28800`; // 8 hours
+            window.location.href = '/hub';
+          } else {
+            errorDiv.textContent = data.message || 'Login failed';
+            errorDiv.classList.remove('hidden');
+          }
+        })
+        .catch(error => {
+          console.error('Login error:', error);
+          errorDiv.textContent = 'Network error. Please try again.';
+          errorDiv.classList.remove('hidden');
+        })
+        .finally(() => {
+          loginBtn.disabled = false;
+          loginBtn.textContent = 'Sign In';
+        });
+      };
+      
+      // Focus on employee ID field
+      document.getElementById('employeeId').focus();
+    </script>
+    """
+    
+    return HTMLResponse(content=body)
+
+@app.post("/api/login")
+def login_api(request: dict):
+    employee_id = request.get("employee_id", "").strip().upper()
+    password = request.get("password", "")
+    
+    if not employee_id or not password:
+        return JSONResponse(content={"success": False, "message": "Employee ID and password are required"})
+    
+    # Check if user exists and is active
+    if employee_id not in USER_ROLES:
+        return JSONResponse(content={"success": False, "message": "Invalid Employee ID"})
+    
+    user = USER_ROLES[employee_id]
+    if not user["is_active"]:
+        return JSONResponse(content={"success": False, "message": "Account is disabled"})
+    
+    # Verify password
+    password_hash = hash_password(password)
+    if password_hash != user["password_hash"]:
+        return JSONResponse(content={"success": False, "message": "Invalid password"})
+    
+    # Create session
+    session_id = create_session(employee_id)
+    
+    return JSONResponse(content={
+        "success": True,
+        "session_id": session_id,
+        "user": {
+            "employee_id": employee_id,
+            "name": user["name"],
+            "role": user["role"]
+        }
+    })
+
+@app.get("/api/user/current")
+def get_current_user_api(request: Request):
+    user = get_current_user(request)
+    if not user:
+        return JSONResponse(content={"success": False, "message": "Not authenticated"})
+    
+    return JSONResponse(content={
+        "success": True,
+        "user": {
+            "employee_id": user["employee_id"],
+            "name": user["name"],
+            "role": user["role"],
+            "permissions": user["permissions"]
+        }
+    })
+
+@app.get("/logout")
+def logout(request: Request):
+    session_id = request.cookies.get("session_id")
+    if session_id and session_id in ACTIVE_SESSIONS:
+        del ACTIVE_SESSIONS[session_id]
+    
+    response = RedirectResponse(url="/login")
+    response.delete_cookie("session_id")
+    return response
+
+@app.get("/admin/users")
+def admin_users_page(request: Request, user: dict = Depends(require_permission("admin"))):
+    body = """
+    <section class="glass p-6">
+      <h1 class="text-3xl font-bold">User Management</h1>
+      <p class="text-white/80 mt-2">Manage employee accounts, roles, and passwords.</p>
+      
+      <div class="mt-6 grid gap-6">
+        <!-- Add New User -->
+        <div class="glass p-5">
+          <h2 class="text-xl font-semibold mb-4">Add New User</h2>
+          <form id="addUserForm" class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <input id="newEmployeeId" placeholder="Employee ID (EMP007)" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm"/>
+            <input id="newName" placeholder="Full Name" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm"/>
+            <select id="newRole" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm">
+              <option value="employee">Employee</option>
+              <option value="manager">Manager</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button type="submit" class="btn btn-primary">Add User</button>
+          </form>
+        </div>
+        
+        <!-- Users List -->
+        <div class="glass p-0 overflow-auto">
+          <table class="min-w-full text-sm">
+            <thead class="bg-slate-900/80">
+              <tr>
+                <th class="text-left p-4 border-b border-white/10">Employee ID</th>
+                <th class="text-left p-4 border-b border-white/10">Name</th>
+                <th class="text-left p-4 border-b border-white/10">Role</th>
+                <th class="text-left p-4 border-b border-white/10">Status</th>
+                <th class="text-left p-4 border-b border-white/10">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="usersTableBody">
+              <!-- Users will be loaded here -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+      
+      <!-- Edit User Modal -->
+      <div id="editModal" class="fixed inset-0 hidden items-center justify-center bg-black/70 p-6">
+        <div class="bg-slate-900/90 border border-white/10 rounded-2xl p-6 max-w-md w-full">
+          <h3 class="text-xl font-semibold mb-4">Edit User</h3>
+          <form id="editUserForm" class="space-y-4">
+            <input type="hidden" id="editEmployeeId">
+            <div>
+              <label class="block text-white/90 text-sm font-medium mb-2">Name</label>
+              <input id="editName" class="w-full rounded-xl bg-slate-800/60 border border-white/10 px-3 py-2 text-sm"/>
+            </div>
+            <div>
+              <label class="block text-white/90 text-sm font-medium mb-2">Role</label>
+              <select id="editRole" class="w-full rounded-xl bg-slate-800/60 border border-white/10 px-3 py-2 text-sm">
+                <option value="employee">Employee</option>
+                <option value="manager">Manager</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-white/90 text-sm font-medium mb-2">New Password (leave blank to keep current)</label>
+              <input type="password" id="editPassword" class="w-full rounded-xl bg-slate-800/60 border border-white/10 px-3 py-2 text-sm"/>
+            </div>
+            <div class="flex gap-3">
+              <button type="submit" class="btn btn-primary flex-1">Save Changes</button>
+              <button type="button" onclick="closeEditModal()" class="btn btn-secondary flex-1">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+    
+    <script>
+      // Load users on page load
+      loadUsers();
+      
+      function loadUsers() {
+        fetch('/api/admin/users')
+          .then(response => response.json())
+          .then(data => {
+            if (data.success) {
+              renderUsers(data.users);
+            } else {
+              alert('Error loading users: ' + data.message);
+            }
+          })
+          .catch(error => {
+            console.error('Error loading users:', error);
+            alert('Network error loading users');
+          });
+      }
+      
+      function renderUsers(users) {
+        const tbody = document.getElementById('usersTableBody');
+        tbody.innerHTML = '';
+        
+        Object.entries(users).forEach(([employeeId, user]) => {
+          const row = document.createElement('tr');
+          row.innerHTML = `
+            <td class="p-4 border-b border-white/10">${employeeId}</td>
+            <td class="p-4 border-b border-white/10">${user.name}</td>
+            <td class="p-4 border-b border-white/10">
+              <span class="role-badge ${user.role}">${user.role.charAt(0).toUpperCase() + user.role.slice(1)}</span>
+            </td>
+            <td class="p-4 border-b border-white/10">
+              <span class="badge ${user.is_active ? 'bg-green-500' : 'bg-red-500'}">${user.is_active ? 'Active' : 'Disabled'}</span>
+            </td>
+            <td class="p-4 border-b border-white/10">
+              <button onclick="editUser('${employeeId}')" class="btn btn-sm btn-secondary mr-2">Edit</button>
+              <button onclick="toggleUser('${employeeId}', ${!user.is_active})" class="btn btn-sm ${user.is_active ? 'btn-accent' : 'btn-primary'}">
+                ${user.is_active ? 'Disable' : 'Enable'}
+              </button>
+            </td>
+          `;
+          tbody.appendChild(row);
+        });
+      }
+      
+      // Add new user
+      document.getElementById('addUserForm').onsubmit = function(e) {
+        e.preventDefault();
+        
+        const employeeId = document.getElementById('newEmployeeId').value.trim().toUpperCase();
+        const name = document.getElementById('newName').value.trim();
+        const role = document.getElementById('newRole').value;
+        
+        if (!employeeId || !name) {
+          alert('Please fill in all fields');
+          return;
+        }
+        
+        fetch('/api/admin/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            employee_id: employeeId,
+            name: name,
+            role: role
+          })
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            alert('User added successfully! Default password: ' + data.default_password);
+            document.getElementById('addUserForm').reset();
+            loadUsers();
+          } else {
+            alert('Error: ' + data.message);
+          }
+        })
+        .catch(error => {
+          console.error('Error adding user:', error);
+          alert('Network error');
+        });
+      };
+      
+      // Edit user
+      function editUser(employeeId) {
+        fetch('/api/admin/users/' + employeeId)
+          .then(response => response.json())
+          .then(data => {
+            if (data.success) {
+              document.getElementById('editEmployeeId').value = employeeId;
+              document.getElementById('editName').value = data.user.name;
+              document.getElementById('editRole').value = data.user.role;
+              document.getElementById('editPassword').value = '';
+              document.getElementById('editModal').classList.remove('hidden');
+              document.getElementById('editModal').classList.add('flex');
+            }
+          })
+          .catch(error => {
+            console.error('Error loading user:', error);
+            alert('Network error');
+          });
+      }
+      
+      function closeEditModal() {
+        document.getElementById('editModal').classList.add('hidden');
+        document.getElementById('editModal').classList.remove('flex');
+      }
+      
+      // Save user changes
+      document.getElementById('editUserForm').onsubmit = function(e) {
+        e.preventDefault();
+        
+        const employeeId = document.getElementById('editEmployeeId').value;
+        const name = document.getElementById('editName').value.trim();
+        const role = document.getElementById('editRole').value;
+        const password = document.getElementById('editPassword').value;
+        
+        const updateData = { name, role };
+        if (password) {
+          updateData.password = password;
+        }
+        
+        fetch('/api/admin/users/' + employeeId, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updateData)
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            alert('User updated successfully!');
+            closeEditModal();
+            loadUsers();
+          } else {
+            alert('Error: ' + data.message);
+          }
+        })
+        .catch(error => {
+          console.error('Error updating user:', error);
+          alert('Network error');
+        });
+      };
+      
+      // Toggle user active status
+      function toggleUser(employeeId, enable) {
+        const action = enable ? 'enable' : 'disable';
+        if (!confirm(`Are you sure you want to ${action} this user?`)) return;
+        
+        fetch('/api/admin/users/' + employeeId + '/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_active: enable })
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            loadUsers();
+          } else {
+            alert('Error: ' + data.message);
+          }
+        })
+        .catch(error => {
+          console.error('Error toggling user:', error);
+          alert('Network error');
+        });
+      }
+    </script>
+    
+    <style>
+      .badge { padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; }
+      .role-badge.admin { background: #ef4444; color: white; }
+      .role-badge.manager { background: #f59e0b; color: white; }
+      .role-badge.employee { background: #10b981; color: white; }
+    </style>
+    """
+    
+    return _eraya_lumen_page("User Management", body)
+
+# Admin User Management API Endpoints
+@app.get("/api/admin/users")
+def get_all_users(request: Request, admin: dict = Depends(require_permission("admin"))):
+    """Get all users (admin only)"""
+    return JSONResponse(content={"success": True, "users": USER_ROLES})
+
+@app.get("/api/admin/users/{employee_id}")
+def get_user(employee_id: str, request: Request, admin: dict = Depends(require_permission("admin"))):
+    """Get specific user details"""
+    if employee_id not in USER_ROLES:
+        return JSONResponse(content={"success": False, "message": "User not found"})
+    
+    user = USER_ROLES[employee_id].copy()
+    user.pop("password_hash", None)  # Don't send password hash
+    return JSONResponse(content={"success": True, "user": user})
+
+@app.post("/api/admin/users")
+def create_user(request: dict, req: Request, admin: dict = Depends(require_permission("admin"))):
+    """Create new user"""
+    employee_id = request.get("employee_id", "").strip().upper()
+    name = request.get("name", "").strip()
+    role = request.get("role", "employee")
+    
+    if not employee_id or not name:
+        return JSONResponse(content={"success": False, "message": "Employee ID and name are required"})
+    
+    if employee_id in USER_ROLES:
+        return JSONResponse(content={"success": False, "message": "Employee ID already exists"})
+    
+    if role not in ["employee", "manager", "admin"]:
+        return JSONResponse(content={"success": False, "message": "Invalid role"})
+    
+    # Generate default password
+    default_password = name.lower().replace(" ", "") + "123"
+    
+    # Set permissions based on role
+    permissions = {
+        "employee": ["attendance", "chat"],
+        "manager": ["orders", "packing", "attendance", "chat", "reports"],
+        "admin": ["all"]
+    }
+    
+    USER_ROLES[employee_id] = {
+        "name": name,
+        "role": role,
+        "permissions": permissions[role],
+        "password_hash": hash_password(default_password),
+        "is_active": True
+    }
+    
+    return JSONResponse(content={
+        "success": True, 
+        "message": "User created successfully",
+        "default_password": default_password
+    })
+
+@app.put("/api/admin/users/{employee_id}")
+def update_user(employee_id: str, request: dict, req: Request, admin: dict = Depends(require_permission("admin"))):
+    """Update user details"""
+    if employee_id not in USER_ROLES:
+        return JSONResponse(content={"success": False, "message": "User not found"})
+    
+    name = request.get("name", "").strip()
+    role = request.get("role", "")
+    password = request.get("password", "")
+    
+    if not name:
+        return JSONResponse(content={"success": False, "message": "Name is required"})
+    
+    if role not in ["employee", "manager", "admin"]:
+        return JSONResponse(content={"success": False, "message": "Invalid role"})
+    
+    # Set permissions based on role
+    permissions = {
+        "employee": ["attendance", "chat"],
+        "manager": ["orders", "packing", "attendance", "chat", "reports"],
+        "admin": ["all"]
+    }
+    
+    # Update user data
+    USER_ROLES[employee_id]["name"] = name
+    USER_ROLES[employee_id]["role"] = role
+    USER_ROLES[employee_id]["permissions"] = permissions[role]
+    
+    # Update password if provided
+    if password:
+        USER_ROLES[employee_id]["password_hash"] = hash_password(password)
+    
+    return JSONResponse(content={"success": True, "message": "User updated successfully"})
+
+@app.post("/api/admin/users/{employee_id}/toggle")
+def toggle_user_status(employee_id: str, request: dict, req: Request, admin: dict = Depends(require_permission("admin"))):
+    """Enable/disable user account"""
+    if employee_id not in USER_ROLES:
+        return JSONResponse(content={"success": False, "message": "User not found"})
+    
+    is_active = request.get("is_active", True)
+    USER_ROLES[employee_id]["is_active"] = is_active
+    
+    # Invalidate user's sessions if disabling
+    if not is_active:
+        sessions_to_remove = []
+        for session_id, session_data in ACTIVE_SESSIONS.items():
+            if session_data["employee_id"] == employee_id:
+                sessions_to_remove.append(session_id)
+        
+        for session_id in sessions_to_remove:
+            del ACTIVE_SESSIONS[session_id]
+    
+    action = "enabled" if is_active else "disabled"
+    return JSONResponse(content={"success": True, "message": f"User {action} successfully"})
 
 
 @app.post("/api/process")
@@ -391,33 +994,33 @@ def api_download(job_id: str):
 
 # -------------------- ERAYA HUB ADD-ON (UI shell) --------------------
 def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
-    html = f"""
+    html = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{title} — Eraya Ops</title>
+  <title>""" + title + """ — Eraya Ops</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    :root {{ --brand:#a78bfa; --brand-strong:#8b5cf6; --accent:#f0abfc; }}
-    .glass{{backdrop-filter:blur(10px);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.12);border-radius:1.25rem;}}
-    .btn{{display:inline-flex;align-items:center;justify-content:center;border-radius:1rem;padding:.6rem 1rem;font-weight:600;box-shadow:0 6px 20px rgba(168,139,250,.25), inset 0 1px 0 rgba(255,255,255,.08);}}
-    .btn-primary{{background:linear-gradient(135deg,var(--brand-strong),var(--accent));color:#0b0416}}
-    .btn-secondary{{background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.2)}}
-    *{{scrollbar-width:thin;scrollbar-color:var(--brand) #0f172a}}
-    *::-webkit-scrollbar{{height:8px;width:8px}}
-    *::-webkit-scrollbar-thumb{{background:var(--brand);border-radius:8px}}
+    :root { --brand:#a78bfa; --brand-strong:#8b5cf6; --accent:#f0abfc; }
+    .glass{backdrop-filter:blur(10px);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.12);border-radius:1.25rem;}
+    .btn{display:inline-flex;align-items:center;justify-content:center;border-radius:1rem;padding:.6rem 1rem;font-weight:600;box-shadow:0 6px 20px rgba(168,139,250,.25), inset 0 1px 0 rgba(255,255,255,.08);}
+    .btn-primary{background:linear-gradient(135deg,var(--brand-strong),var(--accent));color:#0b0416}
+    .btn-secondary{background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.2)}
+    *{scrollbar-width:thin;scrollbar-color:var(--brand) #0f172a}
+    *::-webkit-scrollbar{height:8px;width:8px}
+    *::-webkit-scrollbar-thumb{background:var(--brand);border-radius:8px}
 
     /* Sidebar Styles */
-    .sidebar {{
+    .sidebar {
       width: 280px;
       transition: width 0.3s ease;
-    }}
-    .sidebar.collapsed {{
+    }
+    .sidebar.collapsed {
       width: 80px;
-    }}
-    .sidebar-item {{
+    }
+    .sidebar-item {
       display: flex;
       align-items: center;
       padding: 12px 16px;
@@ -427,22 +1030,22 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
       cursor: pointer;
       text-decoration: none;
       color: rgba(255,255,255,0.7);
-    }}
-    .sidebar-item:hover {{
+    }
+    .sidebar-item:hover {
       background: rgba(255,255,255,0.08);
       color: white;
       transform: translateX(4px);
-    }}
-    .sidebar-item.active {{
+    }
+    .sidebar-item.active {
       background: linear-gradient(135deg,var(--brand-strong),var(--accent));
       color: #0b0416;
       font-weight: 600;
-    }}
-    .sidebar-item.disabled {{
+    }
+    .sidebar-item.disabled {
       opacity: 0.5;
       cursor: not-allowed;
-    }}
-    .sidebar-icon {{
+    }
+    .sidebar-icon {
       width: 24px;
       height: 24px;
       display: flex;
@@ -450,27 +1053,27 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
       justify-content: center;
       font-size: 18px;
       margin-right: 12px;
-    }}
-    .sidebar-text {{
+    }
+    .sidebar-text {
       flex: 1;
       font-size: 14px;
       font-weight: 500;
-    }}
-    .sidebar.collapsed .sidebar-text {{
+    }
+    .sidebar.collapsed .sidebar-text {
       display: none;
-    }}
-    .sidebar-badge {{
+    }
+    .sidebar-badge {
       background: rgba(239, 68, 68, 0.9);
       color: white;
       font-size: 10px;
       padding: 2px 6px;
       border-radius: 10px;
       font-weight: 600;
-    }}
-    .sidebar.collapsed .sidebar-badge {{
+    }
+    .sidebar.collapsed .sidebar-badge {
       display: none;
-    }}
-    .sidebar-separator {{
+    }
+    .sidebar-separator {
       margin: 16px 12px 8px 12px;
       padding: 8px 4px;
       font-size: 11px;
@@ -479,18 +1082,18 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
       text-transform: uppercase;
       letter-spacing: 0.5px;
       border-top: 1px solid rgba(255,255,255,0.1);
-    }}
-    .sidebar.collapsed .sidebar-separator {{
+    }
+    .sidebar.collapsed .sidebar-separator {
       display: none;
-    }}
-    .main-content {{
+    }
+    .main-content {
       margin-left: 280px;
       transition: margin-left 0.3s ease;
-    }}
-    .main-content.expanded {{
+    }
+    .main-content.expanded {
       margin-left: 80px;
-    }}
-    .role-badge {{
+    }
+    .role-badge {
       background: linear-gradient(135deg, #10b981, #059669);
       color: white;
       font-size: 10px;
@@ -498,26 +1101,26 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
       border-radius: 12px;
       font-weight: 600;
       text-transform: uppercase;
-    }}
-    .role-badge.manager {{
+    }
+    .role-badge.manager {
       background: linear-gradient(135deg, #f59e0b, #d97706);
-    }}
-    .role-badge.admin {{
+    }
+    .role-badge.admin {
       background: linear-gradient(135deg, #dc2626, #b91c1c);
-    }}
+    }
     
-    @media (max-width: 768px) {{
-      .sidebar {{
+    @media (max-width: 768px) {
+      .sidebar {
         transform: translateX(-100%);
         z-index: 50;
-      }}
-      .sidebar.mobile-open {{
+      }
+      .sidebar.mobile-open {
         transform: translateX(0);
-      }}
-      .main-content {{
+      }
+      .main-content {
         margin-left: 0;
-      }}
-    }}
+      }
+    }
   </style>
 </head>
 <body class="min-h-screen text-white bg-gradient-to-br from-slate-950 via-indigo-950 to-fuchsia-900">
@@ -531,8 +1134,9 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
         <div class="flex-1 min-w-0">
           <div class="text-lg font-semibold tracking-wide">Eraya Ops</div>
                 <div id="userInfo" class="flex items-center gap-2 mt-1">
-        <span class="text-xs text-white/60">Admin Access</span>
-        <span class="role-badge admin">Full Access</span>
+        <span class="text-xs text-white/60" id="userName">Loading...</span>
+        <span class="role-badge admin" id="userRole">Loading...</span>
+        <button onclick="logout()" class="text-xs text-red-400 hover:text-red-300 ml-2">Logout</button>
       </div>
     </div>
     <button id="sidebarToggle" class="p-2 hover:bg-white/10 rounded-lg">
@@ -569,11 +1173,11 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
   </header>
 
     <main class="px-4 py-10 md:px-8 lg:px-12">
-    {body_html}
+    """ + body_html + """
   </main>
 
   <footer class="border-t border-white/10 py-8 text-center text-white/70">
-    Built with ❤️ for Eraya — {title}
+    Built with ❤️ for Eraya — """ + title + """
   </footer>
   </div>
 
@@ -589,118 +1193,140 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
     const mobileMenuToggle = document.getElementById('mobileMenuToggle');
 
     // Toggle sidebar
-    function toggleSidebar() {{
+    function toggleSidebar() {
         sidebarCollapsed = !sidebarCollapsed;
-        if (sidebarCollapsed) {{
+        if (sidebarCollapsed) {
             sidebar.classList.add('collapsed');
             mainContent.classList.add('expanded');
             sidebarToggle.innerHTML = '<span class="text-lg">⟩</span>';
-        }} else {{
+        } else {
             sidebar.classList.remove('collapsed');
             mainContent.classList.remove('expanded');
             sidebarToggle.innerHTML = '<span class="text-lg">⟨</span>';
-        }}
+        }
         // Save state
         localStorage.setItem('sidebarCollapsed', sidebarCollapsed.toString());
-    }}
+    }
 
     // Mobile menu toggle
-    function toggleMobileMenu() {{
+    function toggleMobileMenu() {
         sidebar.classList.toggle('mobile-open');
-    }}
+    }
 
     // Load navigation menu directly
-    async function loadNavigation() {{
-        try {{
+    async function loadNavigation() {
+        try {
             const response = await fetch('/api/navigation/admin');
-            if (!response.ok) {{
-                throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
-            }}
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
             const data = await response.json();
             
             // Render navigation menu
             renderNavigationMenu(data.menu);
             
-        }} catch (error) {{
+        } catch (error) {
             console.error('Error loading navigation:', error);
             navigationMenu.innerHTML = '<div class="text-center text-red-400 text-sm p-4">Error loading navigation</div>';
-        }}
-    }}
+        }
+    }
 
     // Render navigation menu
-    function renderNavigationMenu(menuItems) {{
+    function renderNavigationMenu(menuItems) {
         let html = '';
         
-        menuItems.forEach(item => {{
-            if (item.type === 'separator') {{
-                html += `<div class="sidebar-separator">${{item.name}}</div>`;
-            }} else {{
+        menuItems.forEach(item => {
+            if (item.type === 'separator') {
+                html += `<div class="sidebar-separator">${item.name}</div>`;
+            } else {
                 const activeClass = window.location.pathname === item.url ? 'active' : '';
                 const disabledClass = !item.active ? 'disabled' : '';
-                const badge = item.badge ? `<span class="sidebar-badge">${{item.badge}}</span>` : '';
+                const badge = item.badge ? `<span class="sidebar-badge">${item.badge}</span>` : '';
                 
                 html += `
-                    <a href="${{item.active ? item.url : '#'}}" class="sidebar-item ${{activeClass}} ${{disabledClass}}" ${{!item.active ? 'onclick="return false;"' : ''}}>
-                        <div class="sidebar-icon">${{item.icon}}</div>
-                        <div class="sidebar-text">${{item.name}}</div>
-                        ${{badge}}
+                    <a href="${item.active ? item.url : '#'}" class="sidebar-item ${activeClass} ${disabledClass}" ${!item.active ? 'onclick="return false;"' : ''}>
+                        <div class="sidebar-icon">${item.icon}</div>
+                        <div class="sidebar-text">${item.name}</div>
+                        ${badge}
                     </a>
                 `;
-            }}
-        }});
+            }
+        });
         
         navigationMenu.innerHTML = html;
-    }}
+    }
 
     // Event listeners
     sidebarToggle.addEventListener('click', toggleSidebar);
     mobileMenuToggle?.addEventListener('click', toggleMobileMenu);
 
     // Initialize sidebar - ENSURE THIS RUNS AFTER DOM IS READY
-    function initializeSidebar() {{
+    function initializeSidebar() {
         // Restore sidebar collapsed state
         const savedCollapsed = localStorage.getItem('sidebarCollapsed');
-        if (savedCollapsed === 'true') {{
+        if (savedCollapsed === 'true') {
             sidebarCollapsed = true;
             sidebar.classList.add('collapsed');
             mainContent.classList.add('expanded');
             sidebarToggle.innerHTML = '<span class="text-lg">⟩</span>';
-        }}
+        }
         
         // Load navigation menu directly
         loadNavigation();
-    }}
+        loadUserInfo();
+    }
+    
+    function loadUserInfo() {
+      fetch('/api/user/current')
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            document.getElementById('userName').textContent = data.user.name;
+            document.getElementById('userRole').textContent = data.user.role.charAt(0).toUpperCase() + data.user.role.slice(1);
+            document.getElementById('userRole').className = 'role-badge ' + data.user.role;
+          }
+        })
+        .catch(error => {
+          console.error('Error loading user info:', error);
+        });
+    }
+    
+    function logout() {
+      if (confirm('Are you sure you want to logout?')) {
+        window.location.href = '/logout';
+      }
+    }
     
     // Initialize after a short delay to ensure DOM is ready
     setTimeout(initializeSidebar, 100);
     
     // Also initialize when DOM is fully loaded (backup)
-    if (document.readyState === 'loading') {{
+    if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initializeSidebar);
-    }} else {{
+    } else {
         // DOM is already loaded, initialize immediately as backup
         initializeSidebar();
-    }}
+    }
 
     // Handle responsive behavior
-    function handleResize() {{
-        if (window.innerWidth < 768) {{
+    function handleResize() {
+        if (window.innerWidth < 768) {
             mainContent.style.marginLeft = '0';
-        }} else {{
+        } else {
             sidebar.classList.remove('mobile-open');
             mainContent.style.marginLeft = sidebarCollapsed ? '80px' : '280px';
-        }}
-    }}
+        }
+    }
 
     window.addEventListener('resize', handleResize);
     handleResize(); // Initial call
 
     // Close mobile menu when clicking outside
-    document.addEventListener('click', function(e) {{
-        if (window.innerWidth < 768 && !sidebar.contains(e.target) && !mobileMenuToggle?.contains(e.target)) {{
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth < 768 && !sidebar.contains(e.target) && !mobileMenuToggle?.contains(e.target)) {
             sidebar.classList.remove('mobile-open');
-        }}
-    }});
+        }
+    });
   </script>
 </body>
 </html>
@@ -710,7 +1336,7 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
 
 # -------------------- DASHBOARD --------------------
 @app.get("/hub")
-def eraya_hub_home():
+def eraya_hub_home(request: Request, user: dict = Depends(require_auth)):
     body = """
     <!-- Header Section -->
     <section class="text-center">
