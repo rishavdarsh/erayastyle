@@ -149,12 +149,49 @@ USER_STATUS = {}  # Format: {"EMP001": {"status": "online", "last_seen": timesta
 MESSAGE_REACTIONS = {}
 
 # -------------------- SHOPIFY INTEGRATION --------------------
-# Shopify store configuration - In production, use environment variables or database
-SHOPIFY_CONFIG = {
-    "store_name": "",  # Will be set via settings page
-    "access_token": "",  # Will be set via settings page
-    "api_version": "2024-01"  # Latest stable API version
-}
+# Shopify store configuration - Persistent storage in JSON file
+SHOPIFY_CONFIG_FILE = "shopify_config.json"
+
+def load_shopify_config():
+    """Load Shopify configuration from file."""
+    default_config = {
+        "store_name": "",
+        "access_token": "",
+        "api_version": "2024-01",
+        "configured_at": None,
+        "last_updated": None
+    }
+    
+    try:
+        if os.path.exists(SHOPIFY_CONFIG_FILE):
+            with open(SHOPIFY_CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+                # Merge with defaults in case new fields were added
+                default_config.update(config)
+                print(f"✅ Loaded Shopify config from {SHOPIFY_CONFIG_FILE}")
+                return default_config
+    except Exception as e:
+        print(f"⚠️ Error loading Shopify config: {e}")
+    
+    print(f"📝 Using default Shopify config")
+    return default_config
+
+def save_shopify_config(config):
+    """Save Shopify configuration to file."""
+    try:
+        # Add timestamp
+        config["last_updated"] = datetime.now().isoformat()
+        
+        with open(SHOPIFY_CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=2)
+        print(f"✅ Saved Shopify config to {SHOPIFY_CONFIG_FILE}")
+        return True
+    except Exception as e:
+        print(f"❌ Error saving Shopify config: {e}")
+        return False
+
+# Load configuration on startup
+SHOPIFY_CONFIG = load_shopify_config()
 
 # In-memory store for cached Shopify data
 SHOPIFY_CACHE = {
@@ -2959,24 +2996,40 @@ def get_shopify_analytics():
 
 @app.post("/api/shopify/config")
 def configure_shopify(store_name: str = Form(...), access_token: str = Form(...)):
-    """Configure Shopify store connection."""
+    """Configure Shopify store connection and save it persistently."""
+    global SHOPIFY_CONFIG
+    
     try:
-        # Test the connection
+        # Test the connection first
         old_config = SHOPIFY_CONFIG.copy()
-        SHOPIFY_CONFIG["store_name"] = store_name.strip()
-        SHOPIFY_CONFIG["access_token"] = access_token.strip()
+        test_config = SHOPIFY_CONFIG.copy()
+        test_config["store_name"] = store_name.strip()
+        test_config["access_token"] = access_token.strip()
+        test_config["configured_at"] = datetime.now().isoformat()
+        
+        # Temporarily update config for testing
+        SHOPIFY_CONFIG.update(test_config)
         
         # Test API call
         test_data = make_shopify_request("shop.json")
         shop_info = test_data.get("shop", {})
         
-        return JSONResponse(content={
-            "success": True,
-            "message": "Shopify store connected successfully!",
-            "shop_name": shop_info.get("name", store_name),
-            "shop_domain": shop_info.get("domain", f"{store_name}.myshopify.com"),
-            "currency": shop_info.get("currency", "USD")
-        })
+        # If test successful, save to file
+        if save_shopify_config(test_config):
+            print(f"🎉 Shopify configuration saved! Store: {store_name}")
+            
+            return JSONResponse(content={
+                "success": True,
+                "message": "Shopify store connected and saved successfully!",
+                "shop_name": shop_info.get("name", store_name),
+                "shop_domain": shop_info.get("domain", f"{store_name}.myshopify.com"),
+                "currency": shop_info.get("currency", "USD"),
+                "configured_at": test_config["configured_at"],
+                "saved_to_file": True
+            })
+        else:
+            raise Exception("Failed to save configuration to file")
+            
     except Exception as e:
         # Restore old config on error
         SHOPIFY_CONFIG.update(old_config)
@@ -2985,12 +3038,47 @@ def configure_shopify(store_name: str = Form(...), access_token: str = Form(...)
 @app.get("/api/shopify/config")
 def get_shopify_config():
     """Get current Shopify configuration status."""
+    is_configured = bool(SHOPIFY_CONFIG["store_name"] and SHOPIFY_CONFIG["access_token"])
+    
     return JSONResponse(content={
-        "configured": bool(SHOPIFY_CONFIG["store_name"] and SHOPIFY_CONFIG["access_token"]),
+        "configured": is_configured,
         "store_name": SHOPIFY_CONFIG["store_name"],
         "api_version": SHOPIFY_CONFIG["api_version"],
-        "last_updated": SHOPIFY_CACHE.get("last_updated")
+        "configured_at": SHOPIFY_CONFIG.get("configured_at"),
+        "last_updated": SHOPIFY_CONFIG.get("last_updated"),
+        "config_file_exists": os.path.exists(SHOPIFY_CONFIG_FILE),
+        "status": "✅ Connected and saved" if is_configured else "⚠️ Not configured"
     })
+
+@app.delete("/api/shopify/config")
+def clear_shopify_config():
+    """Clear/reset Shopify configuration."""
+    global SHOPIFY_CONFIG
+    
+    try:
+        # Reset to default config
+        SHOPIFY_CONFIG = {
+            "store_name": "",
+            "access_token": "",
+            "api_version": "2024-01",
+            "configured_at": None,
+            "last_updated": None
+        }
+        
+        # Remove config file if it exists
+        if os.path.exists(SHOPIFY_CONFIG_FILE):
+            os.remove(SHOPIFY_CONFIG_FILE)
+            print(f"🗑️ Deleted Shopify config file: {SHOPIFY_CONFIG_FILE}")
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": "Shopify configuration cleared successfully",
+            "config_reset": True,
+            "file_deleted": True
+        })
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error clearing Shopify config: {str(e)}")
 
 # -------------------- USER MANAGEMENT API --------------------
 @app.get("/api/users/stats")
@@ -3998,10 +4086,13 @@ def shopify_settings_page():
           
           <div class="flex gap-3">
             <button type="submit" class="btn btn-primary">
-              🔗 Connect Store
+              🔗 Connect & Save Store
             </button>
             <button type="button" id="testConnection" class="btn btn-secondary">
               🧪 Test Connection
+            </button>
+            <button type="button" id="clearConfig" class="btn btn-danger" style="display: none;">
+              🗑️ Clear Settings
             </button>
           </div>
         </form>
@@ -4051,9 +4142,36 @@ def shopify_settings_page():
       </div>
     </section>
     
+    <style>
+      .btn-danger {
+        background: linear-gradient(135deg, #ef4444, #dc2626);
+        color: white;
+        border: none;
+        padding: 0.5rem 1rem;
+        border-radius: 0.5rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      
+      .btn-danger:hover {
+        background: linear-gradient(135deg, #dc2626, #b91c1c);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+      }
+      
+      .btn-danger:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+    </style>
+    
     <script>
       const form = document.getElementById('shopifyForm');
       const testBtn = document.getElementById('testConnection');
+      const clearBtn = document.getElementById('clearConfig');
       const statusDiv = document.getElementById('connectionStatus');
       const previewDiv = document.getElementById('dataPreview');
       const previewContent = document.getElementById('previewContent');
@@ -4066,13 +4184,22 @@ def shopify_settings_page():
           
           if (data.configured) {
             document.getElementById('storeName').value = data.store_name;
-            showStatus('success', `✅ Connected to ${data.store_name}.myshopify.com`, data);
+            
+            let statusMessage = `✅ Connected to ${data.store_name}.myshopify.com`;
+            if (data.config_file_exists) {
+              statusMessage += ' (Saved permanently)';
+            }
+            
+            showStatus('success', statusMessage, data);
+            clearBtn.style.display = 'inline-block'; // Show clear button when configured
             loadDataPreview();
           } else {
             showStatus('warning', '⚠️ Shopify store not configured yet');
+            clearBtn.style.display = 'none'; // Hide clear button when not configured
           }
         } catch (error) {
           showStatus('error', '❌ Error loading configuration');
+          clearBtn.style.display = 'none';
         }
       }
       
@@ -4084,8 +4211,16 @@ def shopify_settings_page():
         };
         
         let extraInfo = '';
-        if (data && data.last_updated) {
-          extraInfo = `<div class="text-xs mt-1 opacity-75">Last updated: ${new Date(data.last_updated).toLocaleString()}</div>`;
+        if (data) {
+          if (data.configured_at) {
+            extraInfo += `<div class="text-xs mt-1 opacity-75">First configured: ${new Date(data.configured_at).toLocaleString()}</div>`;
+          }
+          if (data.last_updated) {
+            extraInfo += `<div class="text-xs mt-1 opacity-75">Last updated: ${new Date(data.last_updated).toLocaleString()}</div>`;
+          }
+          if (data.config_file_exists) {
+            extraInfo += `<div class="text-xs mt-1 opacity-75">📁 Configuration saved to file</div>`;
+          }
         }
         
         statusDiv.innerHTML = `
@@ -4139,6 +4274,39 @@ def shopify_settings_page():
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         testBtn.click(); // Reuse test connection logic
+      });
+      
+      // Clear configuration
+      clearBtn.addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to clear the Shopify configuration? This will remove all saved settings.')) {
+          return;
+        }
+        
+        clearBtn.disabled = true;
+        clearBtn.textContent = '🔄 Clearing...';
+        
+        try {
+          const response = await fetch('/api/shopify/config', {
+            method: 'DELETE'
+          });
+          
+          const result = await response.json();
+          
+          if (response.ok) {
+            showStatus('success', '✅ Configuration cleared successfully');
+            document.getElementById('storeName').value = '';
+            document.getElementById('accessToken').value = '';
+            clearBtn.style.display = 'none';
+            previewDiv.style.display = 'none';
+          } else {
+            showStatus('error', `❌ ${result.detail}`);
+          }
+        } catch (error) {
+          showStatus('error', '❌ Error clearing configuration: ' + error.message);
+        } finally {
+          clearBtn.disabled = false;
+          clearBtn.textContent = '🗑️ Clear Settings';
+        }
       });
       
       // Load data preview
