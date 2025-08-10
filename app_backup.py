@@ -1,4 +1,4 @@
-﻿import os
+import os
 import uuid
 import threading
 import hashlib
@@ -164,30 +164,6 @@ SHOPIFY_CACHE = {
 }
 
 # -------------------- USER MANAGEMENT SYSTEM --------------------
-# Role-based Icon System
-ROLE_ICONS = {
-    "Super Admin": {
-        "icon": "👑",  # Crown - represents ultimate authority and leadership
-        "icon_color": "#FFD700"
-    },
-    "Admin": {
-        "icon": "🛡️",  # Shield - represents protection and administration
-        "icon_color": "#4F46E5"
-    },
-    "Manager": {
-        "icon": "🎯",  # Target - represents focus, goals, and management
-        "icon_color": "#EF4444"
-    },
-    "Employee": {
-        "icon": "⭐",  # Star - represents talent and contribution
-        "icon_color": "#10B981"
-    }
-}
-
-# Helper function to get role-based icon data
-def get_role_icon(role):
-    return ROLE_ICONS.get(role, {"icon": "👤", "icon_color": "#6B7280"})
-
 # User Management System
 USERS_DATABASE = {
     "EMP001": {
@@ -197,6 +173,7 @@ USERS_DATABASE = {
         "role": "Super Admin",
         "status": "active",
         "photo": "https://via.placeholder.com/100/4f46e5/ffffff?text=R",
+        "icon": "👑",  # Crown for Super Admin
         "created_date": "2024-01-15",
         "last_login": "2024-01-20 14:30:00",
         "login_count": 45,
@@ -210,6 +187,7 @@ USERS_DATABASE = {
         "role": "Admin",
         "status": "active",
         "photo": "https://via.placeholder.com/100/059669/ffffff?text=S",
+        "icon": "☀️",  # Sun for Sunny
         "created_date": "2024-01-16",
         "last_login": "2024-01-20 10:15:00",
         "login_count": 32,
@@ -223,6 +201,7 @@ USERS_DATABASE = {
         "role": "Manager",
         "status": "active",
         "photo": "https://via.placeholder.com/100/dc2626/ffffff?text=R",
+        "icon": "🎯",  # Target for focused Manager
         "created_date": "2024-01-17",
         "last_login": "2024-01-19 16:45:00",
         "login_count": 28,
@@ -236,6 +215,7 @@ USERS_DATABASE = {
         "role": "Employee",
         "status": "inactive",
         "photo": "https://via.placeholder.com/100/7c3aed/ffffff?text=S",
+        "icon": "🚀",  # Rocket for ambitious employee
         "created_date": "2024-01-18",
         "last_login": "2024-01-18 09:20:00",
         "login_count": 12,
@@ -249,6 +229,7 @@ USERS_DATABASE = {
         "role": "Manager",
         "status": "active",
         "photo": "https://via.placeholder.com/100/ea580c/ffffff?text=V",
+        "icon": "⚡",  # Lightning bolt for energetic manager
         "created_date": "2024-01-19",
         "last_login": "2024-01-20 11:30:00",
         "login_count": 15,
@@ -262,6 +243,7 @@ USERS_DATABASE = {
         "role": "Employee",
         "status": "active",
         "photo": "https://via.placeholder.com/100/0891b2/ffffff?text=N",
+        "icon": "🌟",  # Star for bright employee
         "created_date": "2024-01-20",
         "last_login": "2024-01-20 08:45:00",
         "login_count": 8,
@@ -403,91 +385,6 @@ def fetch_shopify_orders(limit: int = 50, status: str = "any") -> List[Dict]:
     except Exception as e:
         print(f"Error fetching Shopify orders: {e}")
         return []
-
-def fetch_all_orders_rest(
-    status: str = "any",
-    fulfillment_status: str = None,
-    created_at_min: str = None,
-    created_at_max: str = None,
-    limit: int = 250
-) -> List[Dict]:
-    """
-    Fetch ALL orders from Shopify using REST API cursor-based pagination.
-    
-    Args:
-        status: Order status filter (any, open, closed, cancelled)
-        fulfillment_status: Fulfillment status filter (fulfilled, partial, unfulfilled, etc.)
-        created_at_min: Start date filter (ISO format)
-        created_at_max: End date filter (ISO format)
-        limit: Orders per page (max 250)
-    
-    Returns:
-        List of all orders matching the criteria
-    """
-    all_orders = []
-    page_info = None
-    page_count = 0
-    max_pages = 1000  # Safety limit to prevent infinite loops
-    
-    # Fields to retrieve from Shopify
-    fields = "id,name,order_number,created_at,financial_status,fulfillment_status,customer,email,order_status_url,line_items,total_price,currency"
-    
-    try:
-        while page_count < max_pages:
-            page_count += 1
-            
-            # Build parameters for this request
-            params = {
-                "limit": min(limit, 250),  # Shopify max is 250
-                "fields": fields
-            }
-            
-            if page_info:
-                # For subsequent pages, only send page_info, limit, and fields
-                params["page_info"] = page_info
-            else:
-                # For first page, apply all filters
-                params["status"] = status
-                if fulfillment_status:
-                    params["fulfillment_status"] = fulfillment_status
-                if created_at_min:
-                    params["created_at_min"] = created_at_min
-                if created_at_max:
-                    params["created_at_max"] = created_at_max
-            
-            print(f"Fetching orders page {page_count} (page_info: {'Yes' if page_info else 'No'})")
-            
-            # Make API call using existing helper
-            data = _shopify_get("/orders.json", params)
-            
-            # Get orders from this page
-            orders = data.get("orders", [])
-            if not orders:
-                print(f"No orders found on page {page_count}, stopping pagination")
-                break
-            
-            # Add orders to our collection
-            all_orders.extend(orders)
-            print(f"Retrieved {len(orders)} orders from page {page_count} (total so far: {len(all_orders)})")
-            
-            # Check if there's a next page
-            next_page_info = data.get("_pagination", {}).get("next_page_info")
-            if not next_page_info:
-                print(f"No more pages available, stopping pagination")
-                break
-            
-            page_info = next_page_info
-        
-        if page_count >= max_pages:
-            print(f"Warning: Reached maximum page limit ({max_pages}), there may be more orders")
-        
-        print(f"Finished fetching all orders: {len(all_orders)} total orders across {page_count} pages")
-        return all_orders
-        
-    except Exception as e:
-        print(f"Error in fetch_all_orders_rest: {e}")
-        # Return what we have so far
-        return all_orders
 
 def fetch_shopify_analytics() -> Dict:
     """Fetch analytics data from Shopify."""
@@ -1412,23 +1309,10 @@ def eraya_hub_home():
           "Nishant": "EMP006",
       };
 
-      // Role-based icon mapping for chat
-      const chatRoleIcons = {
-          'Super Admin': '👑', 'Admin': '🛡️', 'Manager': '🎯', 'Employee': '⭐'
-      };
-      
-      const chatEmployeeRoles = {
-          'EMP001': 'Super Admin', 'EMP002': 'Admin', 'EMP003': 'Manager',
-          'EMP004': 'Employee', 'EMP005': 'Manager', 'EMP006': 'Employee'
-      };
-
       for (const name in employees) {
-          const empId = employees[name];
-          const role = chatEmployeeRoles[empId] || 'Employee';
-          const icon = chatRoleIcons[role] || '👤';
           const option = document.createElement('option');
-          option.value = empId;
-          option.textContent = `${icon} ${name}`;
+          option.value = employees[name];
+          option.textContent = name;
           chatEmployeeSelect.appendChild(option);
       }
 
@@ -1476,36 +1360,16 @@ def eraya_hub_home():
               return;
           }
 
-          // Role-based icon data for chat messages
-          const chatMessageRoleIcons = {
-              'Super Admin': {icon: '👑', icon_color: '#FFD700'},
-              'Admin': {icon: '🛡️', icon_color: '#4F46E5'},
-              'Manager': {icon: '🎯', icon_color: '#EF4444'},
-              'Employee': {icon: '⭐', icon_color: '#10B981'}
-          };
-          
-          const messageEmployeeRoles = {
-              'EMP001': 'Super Admin', 'EMP002': 'Admin', 'EMP003': 'Manager',
-              'EMP004': 'Employee', 'EMP005': 'Manager', 'EMP006': 'Employee'
-          };
-
           let html = '';
           messages.forEach(msg => {
               const time = new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-              const role = messageEmployeeRoles[msg.employee_id] || 'Employee';
-              const userIcon = chatMessageRoleIcons[role] || {icon: '👤', icon_color: '#6b7280'};
-              
               html += `
                   <div class="mb-3">
                       <div class="flex items-center gap-2 mb-1">
-                          <div class="w-5 h-5 rounded-full flex items-center justify-center text-xs profile-icon" 
-                               style="background: ${userIcon.icon_color}; border: 1px solid rgba(255,255,255,0.5);">
-                              ${userIcon.icon}
-                          </div>
                           <span class="font-semibold text-sm text-blue-400">${msg.employee_name}</span>
                           <span class="text-xs text-white/50">${time}</span>
                       </div>
-                      <div class="text-sm bg-slate-800/50 rounded-lg p-2 ml-7">${msg.message}</div>
+                      <div class="text-sm bg-slate-800/50 rounded-lg p-2">${msg.message}</div>
                   </div>
               `;
           });
@@ -1594,14 +1458,14 @@ def eraya_orders_page():
         <div class="glass p-5">
           <div class="flex flex-wrap items-center gap-3">
             <button type="button" id="fetchOrders" class="btn btn-primary">Fetch from Shopify</button>
+            <button type="button" id="fetchAllOrders" class="btn btn-accent">🚀 Fetch ALL Orders (Complete)</button>
             <button type="button" id="fetchUnfulfilled" class="btn btn-primary">📦 Fetch ALL Unfulfilled (30 days)</button>
             <button type="button" id="fetchUnfulfilledCustom" class="btn btn-secondary">📅 Custom Date Range</button>
-            <button type="button" id="fetchAllOrders" class="btn btn-accent">🚀 Fetch ALL Orders (All Pages)</button>
             <button type="button" id="exportOrders" class="btn btn-secondary">Export CSV (filtered)</button>
             <button type="button" id="exportSelected" class="btn btn-accent" disabled>Export Selected (<span id="selectedCount">0</span>)</button>
             <button type="button" id="downloadPhotos" class="btn btn-accent" disabled>Download Main Photos (<span id="selectedPhotos">0</span>)</button>
             <button type="button" id="downloadPolaroids" class="btn btn-accent" disabled>Download Polaroids (<span id="selectedPolaroids">0</span>)</button>
-            <div id="status" class="text-white/70">🔄 Auto-fetching orders...</div>
+            <div id="status" class="text-white/70">Ready to fetch orders. Click a button above to start.</div>
           </div>
           <div class="flex flex-wrap items-center gap-3 mt-2">
             <button type="button" id="selectAll" class="btn btn-sm btn-secondary">Select All</button>
@@ -1704,7 +1568,7 @@ def eraya_orders_page():
 
     <script>
       // elements
-      var fetchBtn=document.getElementById('fetchOrders'), fetchUnfulfilledBtn=document.getElementById('fetchUnfulfilled'), fetchUnfulfilledCustomBtn=document.getElementById('fetchUnfulfilledCustom'), fetchAllBtn=document.getElementById('fetchAllOrders'), exportBtn=document.getElementById('exportOrders'), status=document.getElementById('status');
+      var fetchBtn=document.getElementById('fetchOrders'), fetchAllBtn=document.getElementById('fetchAllOrders'), fetchUnfulfilledBtn=document.getElementById('fetchUnfulfilled'), fetchUnfulfilledCustomBtn=document.getElementById('fetchUnfulfilledCustom'), exportBtn=document.getElementById('exportOrders'), status=document.getElementById('status');
       var exportSelectedBtn=document.getElementById('exportSelected'), downloadPhotosBtn=document.getElementById('downloadPhotos'), downloadPolaroidsBtn=document.getElementById('downloadPolaroids');
       var selectAllBtn=document.getElementById('selectAll'), selectNoneBtn=document.getElementById('selectNone'), selectFilteredBtn=document.getElementById('selectFiltered');
       var qOrder=document.getElementById('qOrder'), qProd=document.getElementById('qProd'), qVar=document.getElementById('qVar');
@@ -2000,14 +1864,26 @@ def eraya_orders_page():
       }
 
       function fetchOrdersFromShopify() {
-        status.textContent='Fetching from Shopify...'; 
+        status.textContent='Fetching orders from Shopify (recent orders with pagination)...'; 
         head.innerHTML=''; 
         body.innerHTML='';
         fetchBtn.disabled = true;
         fetchBtn.textContent = '🔄 Fetching...';
         
         var selectedStatus = qStatus.value;
-        fetch('/api/shopify/orders?status='+encodeURIComponent(selectedStatus)+'&limit=100')
+        // Start fetching with pagination
+        fetchOrdersWithPagination(selectedStatus, null, []);
+      }
+      
+      function fetchOrdersWithPagination(selectedStatus, pageInfo, allOrders) {
+        var url = '/api/shopify/orders?status='+encodeURIComponent(selectedStatus)+'&limit=250';
+        if (pageInfo) {
+          url += '&page_info=' + encodeURIComponent(pageInfo);
+        }
+        
+        status.textContent = 'Fetching ' + selectedStatus + ' orders... (found ' + allOrders.length + ' so far)';
+        
+        fetch(url)
           .then(function(res){ 
             return res.text().then(function(t){ 
               return {ok:res.ok, status:res.status, text:t};
@@ -2034,6 +1910,8 @@ def eraya_orders_page():
                 errorMsg += x.text || ('HTTP ' + x.status);
               }
               status.textContent = errorMsg;
+              fetchBtn.disabled = false;
+              fetchBtn.textContent = 'Fetch from Shopify';
               return; 
             }
             
@@ -2044,26 +1922,141 @@ def eraya_orders_page():
               data=JSON.parse(x.text); 
             } catch(e){ 
               status.textContent='Bad JSON from server'; 
+              fetchBtn.disabled = false;
+              fetchBtn.textContent = 'Fetch from Shopify';
               return; 
             }
+            
             var orders = data.orders || [];
-            nextPageInfo = data.next_page_info;
-            rows = convertShopifyOrdersToRows(orders);
-            status.textContent='✅ Loaded '+orders.length+' orders ('+rows.length+' line items)';
-            buildHead(); 
-            applyFilters();
+            var nextPage = data.next_page_info;
+            nextPageInfo = nextPage; // Store for load more functionality
+            
+            // Add to our collection
+            allOrders = allOrders.concat(orders);
+            
+            // For the basic fetch, we'll limit to reasonable number of pages to avoid overwhelming
+            // If user wants ALL orders, they should use the "Fetch ALL Orders" button
+            if (nextPage && allOrders.length < 1000) {
+              // Continue fetching next page up to 1000 orders
+              fetchOrdersWithPagination(selectedStatus, nextPage, allOrders);
+            } else {
+              // We're done, process all orders
+              rows = convertShopifyOrdersToRows(allOrders);
+              status.textContent='✅ Loaded '+allOrders.length+' '+selectedStatus+' orders ('+rows.length+' line items)' + (nextPage ? ' - Use "Fetch ALL Orders" for complete data' : '');
+              buildHead(); 
+              applyFilters();
+              
+              fetchBtn.disabled = false;
+              fetchBtn.textContent = 'Fetch from Shopify';
+            }
           })
           .catch(function(err){ 
             console.error('Fetch error:', err); 
             status.textContent='❌ Network error: ' + err.message; 
-          })
-          .finally(function(){
             fetchBtn.disabled = false;
             fetchBtn.textContent = 'Fetch from Shopify';
           });
       }
 
       fetchBtn.onclick = fetchOrdersFromShopify;
+      
+      // Fetch ALL orders regardless of status or date with complete pagination
+      function fetchAllOrdersComplete() {
+        status.textContent='Fetching ALL orders from Shopify (this may take a while)...'; 
+        head.innerHTML=''; 
+        body.innerHTML='';
+        fetchAllBtn.disabled = true;
+        fetchAllBtn.textContent = '🔄 Fetching ALL...';
+        
+        // Start fetching all orders without date restrictions
+        fetchAllOrdersWithPagination(null, []);
+      }
+      
+      function fetchAllOrdersWithPagination(pageInfo, allOrders) {
+        var url = '/api/shopify/orders?status=any&limit=250';
+        if (pageInfo) {
+          url += '&page_info=' + encodeURIComponent(pageInfo);
+        }
+        
+        status.textContent = 'Fetching all orders... (found ' + allOrders.length + ' so far)';
+        
+        fetch(url)
+          .then(function(res){ 
+            return res.text().then(function(t){ 
+              return {ok:res.ok, status:res.status, text:t};
+            }); 
+          })
+          .then(function(x){
+            if(!x.ok){ 
+              var errorMsg = 'Error: ';
+              try {
+                var errorData = JSON.parse(x.text);
+                errorMsg += errorData.detail || x.text;
+                
+                // Show setup notice if it's a configuration error
+                if (errorData.detail && (errorData.detail.includes('Shopify configuration missing') || errorData.detail.includes('configure via /shopify/settings'))) {
+                  var notice = document.getElementById('shopifyNotice');
+                  notice.style.display = 'block';
+                }
+              } catch(e) {
+                errorMsg += x.text || ('HTTP ' + x.status);
+              }
+              status.textContent = errorMsg;
+              fetchAllBtn.disabled = false;
+              fetchAllBtn.textContent = '🚀 Fetch ALL Orders (Complete)';
+              return; 
+            }
+            
+            // Hide setup notice on successful fetch
+            document.getElementById('shopifyNotice').style.display = 'none';
+            var data; 
+            try{ 
+              data=JSON.parse(x.text); 
+            } catch(e){ 
+              status.textContent='Bad JSON from server'; 
+              fetchAllBtn.disabled = false;
+              fetchAllBtn.textContent = '🚀 Fetch ALL Orders (Complete)';
+              return; 
+            }
+            
+            var orders = data.orders || [];
+            var nextPage = data.next_page_info;
+            
+            // Add to our collection
+            allOrders = allOrders.concat(orders);
+            
+            // Check if there are more pages - continue as long as nextPage exists
+            if (nextPage) {
+              // Continue fetching next page
+              fetchAllOrdersWithPagination(nextPage, allOrders);
+            } else {
+              // We're done, process all orders
+              rows = convertShopifyOrdersToRows(allOrders);
+              
+              // Clear filters to show all orders
+              qFulfillment.value = 'any';
+              qStatus.value = 'any';
+              
+              status.textContent='✅ Loaded ' + allOrders.length + ' total orders (' + rows.length + ' line items) - ALL DATA FETCHED!';
+              buildHead(); 
+              applyFilters();
+              
+              fetchAllBtn.disabled = false;
+              fetchAllBtn.textContent = '🚀 Fetch ALL Orders (Complete)';
+              
+              // Show success notification
+              showNotification('Successfully loaded ALL ' + allOrders.length + ' orders from your Shopify store!', 'success');
+            }
+          })
+          .catch(function(err){ 
+            console.error('Fetch error:', err); 
+            status.textContent='❌ Network error: ' + err.message; 
+            fetchAllBtn.disabled = false;
+            fetchAllBtn.textContent = '🚀 Fetch ALL Orders (Complete)';
+          });
+      }
+      
+      fetchAllBtn.onclick = fetchAllOrdersComplete;
       
       // Fetch ALL unfulfilled orders with pagination
       function fetchUnfulfilledOrders() {
@@ -2145,8 +2138,8 @@ def eraya_orders_page():
             // Add to our collection
             allOrders = allOrders.concat(orders);
             
-            // Check if there are more pages
-            if (nextPage && orders.length === 250) {
+            // Check if there are more pages - continue as long as nextPage exists
+            if (nextPage) {
               // Continue fetching next page
               fetchAllUnfulfilledWithPagination(startDate, endDate, nextPage, allOrders);
             } else {
@@ -2256,8 +2249,8 @@ def eraya_orders_page():
             // Add to our collection
             allOrders = allOrders.concat(orders);
             
-            // Check if there are more pages
-            if (nextPage && orders.length === 250) {
+            // Check if there are more pages - continue as long as nextPage exists
+            if (nextPage) {
               // Continue fetching next page
               fetchAllUnfulfilledWithPaginationCustom(startDate, endDate, nextPage, allOrders, displayStartDate, displayEndDate);
             } else {
@@ -2291,88 +2284,6 @@ def eraya_orders_page():
       }
       
       fetchUnfulfilledCustomBtn.onclick = fetchUnfulfilledCustomRange;
-      
-      // Fetch ALL orders across all pages
-      function fetchAllOrders() {
-        status.textContent='🚀 Fetching ALL orders from all pages...'; 
-        head.innerHTML=''; 
-        body.innerHTML='';
-        fetchAllBtn.disabled = true;
-        fetchAllBtn.textContent = '🔄 Fetching All...';
-        
-        var selectedStatus = qStatus.value;
-        var url = '/api/shopify/orders/all?status=' + encodeURIComponent(selectedStatus);
-        
-        // Add date filters if they exist
-        if (startDateEl.value) {
-          url += '&created_at_min=' + encodeURIComponent(new Date(startDateEl.value).toISOString());
-        }
-        if (endDateEl.value) {
-          url += '&created_at_max=' + encodeURIComponent(new Date(endDateEl.value + 'T23:59:59').toISOString());
-        }
-        
-        // Add fulfillment status filter if selected
-        if (qFulfillment.value && qFulfillment.value !== 'any') {
-          url += '&fulfillment_status=' + encodeURIComponent(qFulfillment.value);
-        }
-        
-        fetch(url)
-          .then(function(res){ 
-            return res.text().then(function(t){ 
-              return {ok:res.ok, status:res.status, text:t};
-            }); 
-          })
-          .then(function(x){
-            if(!x.ok){ 
-              var errorMsg = 'Error: ';
-              try {
-                var errorData = JSON.parse(x.text);
-                errorMsg += errorData.detail || x.text;
-                
-                // Show setup notice if it's a configuration error
-                if (errorData.detail && (errorData.detail.includes('Shopify configuration missing') || errorData.detail.includes('configure via /shopify/settings'))) {
-                  var notice = document.getElementById('shopifyNotice');
-                  notice.style.display = 'block';
-                }
-              } catch(e) {
-                errorMsg += x.text || ('HTTP ' + x.status);
-              }
-              status.textContent = errorMsg;
-              return; 
-            }
-            
-            // Hide setup notice on successful fetch
-            document.getElementById('shopifyNotice').style.display = 'none';
-            var data; 
-            try{ 
-              data=JSON.parse(x.text); 
-            } catch(e){ 
-              status.textContent='Bad JSON from server'; 
-              return; 
-            }
-            
-            var orders = data.orders || [];
-            var count = data.count || 0;
-            
-            rows = convertShopifyOrdersToRows(orders);
-            status.textContent='✅ Loaded ALL ' + count + ' orders (' + rows.length + ' line items) across all pages!';
-            buildHead(); 
-            applyFilters();
-            
-            // Show success notification
-            showNotification('Successfully loaded ALL ' + count + ' orders from all pages!', 'success');
-          })
-          .catch(function(err){ 
-            console.error('Fetch error:', err); 
-            status.textContent='❌ Network error: ' + err.message; 
-          })
-          .finally(function(){
-            fetchAllBtn.disabled = false;
-            fetchAllBtn.textContent = '🚀 Fetch ALL Orders (All Pages)';
-          });
-      }
-      
-      fetchAllBtn.onclick = fetchAllOrders;
       
       loadMoreBtn.onclick=function(){
         if(!nextPageInfo) return;
@@ -2637,24 +2548,9 @@ def eraya_orders_page():
       selectNoneBtn.onclick = selectNone;
       selectFilteredBtn.onclick = selectFiltered;
       
-      // Auto-fetch orders when page loads
-      document.addEventListener('DOMContentLoaded', function() {
-        console.log('Page loaded, auto-fetching orders...');
-        setTimeout(function() {
-          fetchOrdersFromShopify();
-        }, 500); // Small delay to ensure everything is initialized
-      });
-      
-      // Also auto-fetch if DOM is already loaded
-      if (document.readyState === 'loading') {
-        // DOMContentLoaded listener above will handle this
-      } else {
-        // DOM is already loaded
-        console.log('DOM already loaded, auto-fetching orders...');
-        setTimeout(function() {
-          fetchOrdersFromShopify();
-        }, 100);
-      }
+      // Disable auto-fetch for now to prevent errors
+      // Auto-fetch can be enabled once Shopify is properly configured
+      console.log('Order page loaded. Click a fetch button to load orders.');
     </script>
     """
     return _eraya_lumen_page("Order Management", body)
@@ -3009,12 +2905,6 @@ def get_users(
     """Get filtered and sorted user list."""
     users = list(USERS_DATABASE.values())
     
-    # Add role-based icon data to each user
-    for user in users:
-        role_icon_data = get_role_icon(user["role"])
-        user["icon"] = role_icon_data["icon"]
-        user["icon_color"] = role_icon_data["icon_color"]
-    
     # Apply filters
     if search:
         search = search.lower()
@@ -3043,8 +2933,7 @@ def get_users(
         "users": users,
         "total": len(users),
         "roles": list(ROLE_DEFINITIONS.keys()),
-        "permissions": PERMISSION_DEFINITIONS,
-        "role_icons": ROLE_ICONS
+        "permissions": PERMISSION_DEFINITIONS
     })
 
 @app.post("/api/users/{user_id}/toggle-status")
@@ -3275,53 +3164,6 @@ def api_shopify_orders(
         raise e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching Shopify orders: {str(e)}")
-
-@app.get("/api/shopify/orders/all")
-def api_shopify_orders_all(
-    status: str = "any",
-    fulfillment_status: str = None,
-    created_at_min: str = None,
-    created_at_max: str = None
-):
-    """
-    Fetch ALL orders from Shopify using cursor-based pagination.
-    This endpoint will retrieve every order matching the criteria across all pages.
-    
-    Query Parameters:
-    - status: Order status filter (any, open, closed, cancelled)
-    - fulfillment_status: Fulfillment status filter (fulfilled, partial, unfulfilled, pending)
-    - created_at_min: Start date filter (ISO format, e.g., 2024-01-01T00:00:00Z)
-    - created_at_max: End date filter (ISO format, e.g., 2024-12-31T23:59:59Z)
-    
-    Returns:
-    - count: Total number of orders retrieved
-    - orders: Array of all orders matching the criteria
-    """
-    try:
-        print(f"Starting fetch_all_orders_rest with filters: status={status}, fulfillment_status={fulfillment_status}, created_at_min={created_at_min}, created_at_max={created_at_max}")
-        
-        # Use the new helper function to get all orders
-        all_orders = fetch_all_orders_rest(
-            status=status,
-            fulfillment_status=fulfillment_status,
-            created_at_min=created_at_min,
-            created_at_max=created_at_max,
-            limit=250  # Use maximum page size for efficiency
-        )
-        
-        print(f"Successfully retrieved {len(all_orders)} total orders")
-        
-        return JSONResponse(content={
-            "count": len(all_orders),
-            "orders": all_orders
-        })
-        
-    except HTTPException as e:
-        print(f"HTTPException in api_shopify_orders_all: {e.detail}")
-        raise e
-    except Exception as e:
-        print(f"Unexpected error in api_shopify_orders_all: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching all Shopify orders: {str(e)}")
 
 # -------------------- USER ROLES & NAVIGATION API --------------------
 @app.get("/api/user/{employee_id}/role")
@@ -4280,8 +4122,8 @@ def user_management_page():
               <div class="text-center mb-6">
                 <div class="relative inline-block">
                   <img id="modalUserPhoto" src="" alt="User Photo" class="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-white/20">
-                  <div id="modalUserIcon" class="absolute -bottom-2 -right-2 w-8 h-8 rounded-full flex items-center justify-center text-lg profile-icon" 
-                       style="border: 3px solid rgba(255,255,255,0.9);">
+                  <div id="modalUserIcon" class="absolute -bottom-2 -right-2 w-10 h-10 bg-slate-800 rounded-full flex items-center justify-center border-4 border-white/30 text-xl">
+                    👤
                   </div>
                 </div>
                 <h3 id="modalUserName" class="text-xl font-bold"></h3>
@@ -4428,29 +4270,6 @@ def user_management_page():
       .permission-toggle.inactive { background: rgba(107, 114, 128, 0.2); border-color: #6b7280; }
       tbody tr:hover { background-color: rgba(255,255,255,0.05); }
       .selected-row { background-color: rgba(59, 130, 246, 0.2) !important; }
-      
-      /* Cute Profile Icon Styles */
-      .profile-icon {
-        animation: iconPulse 2s ease-in-out infinite alternate;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        transition: all 0.3s ease;
-      }
-      
-      .profile-icon:hover {
-        transform: scale(1.1);
-        animation: iconBounce 0.6s ease-in-out;
-      }
-      
-      @keyframes iconPulse {
-        0% { transform: scale(1); opacity: 0.9; }
-        100% { transform: scale(1.05); opacity: 1; }
-      }
-      
-      @keyframes iconBounce {
-        0%, 20%, 60%, 100% { transform: translateY(0) scale(1.1); }
-        40% { transform: translateY(-4px) scale(1.15); }
-        80% { transform: translateY(-2px) scale(1.12); }
-      }
     </style>
 
     <script>
@@ -4657,8 +4476,7 @@ def user_management_page():
                 <div class="flex items-center gap-3">
                   <div class="relative">
                     <img src="${user.photo}" alt="${user.name}" class="w-10 h-10 rounded-full border-2 border-white/20">
-                    <div class="absolute -bottom-1 -right-1 w-6 h-6 rounded-full flex items-center justify-center text-sm profile-icon" 
-                         style="background: ${user.icon_color || '#6b7280'}; border: 2px solid rgba(255,255,255,0.8);">
+                    <div class="absolute -bottom-1 -right-1 w-6 h-6 bg-slate-800 rounded-full flex items-center justify-center border-2 border-white/30 text-sm">
                       ${user.icon || '👤'}
                     </div>
                   </div>
@@ -4839,13 +4657,9 @@ def user_management_page():
         // Populate modal with user data
         document.getElementById('modalTitle').textContent = `User Details - ${user.name}`;
         document.getElementById('modalUserPhoto').src = user.photo;
+        document.getElementById('modalUserIcon').textContent = user.icon || '👤';
         document.getElementById('modalUserName').textContent = user.name;
         document.getElementById('modalUserEmail').textContent = user.email;
-        
-        // Set the cute icon
-        const modalUserIcon = document.getElementById('modalUserIcon');
-        modalUserIcon.textContent = user.icon || '👤';
-        modalUserIcon.style.background = user.icon_color || '#6b7280';
         
         const statusClass = user.status === 'active' ? 'status-active' : 'status-inactive';
         document.getElementById('modalUserStatus').innerHTML = `
@@ -4895,16 +4709,9 @@ def user_management_page():
               });
               
               if (response.ok) {
-                // Update the user's role and icon immediately
-                user.role = newRole;
-                updateUserIcon(user);
-                
                 await loadUsers();
                 await loadUserStats();
                 openUserModal(userId); // Refresh modal
-                
-                // Show success message
-                alert(`Role updated successfully! ${user.name} is now a ${newRole}.`);
               }
             } catch (error) {
               alert('Failed to change user role: ' + error.message);
@@ -5241,33 +5048,11 @@ def user_management_page():
         }
       }
       
-      // Helper function to update user icon based on role
-      function updateUserIcon(user) {
-        const roleIcons = {
-          'Super Admin': {icon: '👑', icon_color: '#FFD700'},
-          'Admin': {icon: '🛡️', icon_color: '#4F46E5'},
-          'Manager': {icon: '🎯', icon_color: '#EF4444'},
-          'Employee': {icon: '⭐', icon_color: '#10B981'}
-        };
-        
-        const roleIconData = roleIcons[user.role] || {icon: '👤', icon_color: '#6b7280'};
-        user.icon = roleIconData.icon;
-        user.icon_color = roleIconData.icon_color;
-        
-        // Update modal icon if it's currently open
-        const modalUserIcon = document.getElementById('modalUserIcon');
-        if (modalUserIcon && currentModal && currentModal.id === user.id) {
-          modalUserIcon.textContent = user.icon;
-          modalUserIcon.style.background = user.icon_color;
-        }
-      }
-      
       // Make functions global for onclick handlers
       window.togglePermission = togglePermission;
       window.editRole = editRole;
       window.deleteRole = deleteRole;
       window.toggleRolePermission = toggleRolePermission;
-      window.updateUserIcon = updateUserIcon;
     </script>
     """
     
@@ -5364,25 +5149,13 @@ def eraya_attendance_page():
           "Nishant": "EMP006",
       };
       const employeeIdToName = {};
-      // Role-based icon mapping
-      const roleIcons = {
-          'Super Admin': '👑', 'Admin': '🛡️', 'Manager': '🎯', 'Employee': '⭐'
-      };
-      
-      const employeeRoles = {
-          'EMP001': 'Super Admin', 'EMP002': 'Admin', 'EMP003': 'Manager',
-          'EMP004': 'Employee', 'EMP005': 'Manager', 'EMP006': 'Employee'
-      };
-
       for (const name in employees) {
           const id = employees[name];
           employeeIdToName[id] = name;
-          const role = employeeRoles[id] || 'Employee';
-          const icon = roleIcons[role] || '👤';
 
           const option = document.createElement('option');
           option.value = id;
-          option.textContent = `${icon} ${name}`;
+          option.textContent = name;
           employeeSelect.appendChild(option);
       }
 
@@ -5457,43 +5230,8 @@ def eraya_attendance_page():
                 const statusCard = document.createElement('div');
                 statusCard.className = "glass p-4 rounded-lg";
                 const employeeName = employeeIdToName[emp_id] || emp_id; // Get name or fallback to ID
-                // Get role-based icon data
-                const roleIcons = {
-                    'Super Admin': {icon: '👑', icon_color: '#FFD700'},
-                    'Admin': {icon: '🛡️', icon_color: '#4F46E5'},
-                    'Manager': {icon: '🎯', icon_color: '#EF4444'},
-                    'Employee': {icon: '⭐', icon_color: '#10B981'}
-                };
-                
-                // Map employee IDs to their roles (this could be fetched from API in real implementation)
-                const employeeRoles = {
-                    'EMP001': 'Super Admin',
-                    'EMP002': 'Admin', 
-                    'EMP003': 'Manager',
-                    'EMP004': 'Employee',
-                    'EMP005': 'Manager',
-                    'EMP006': 'Employee'
-                };
-                
-                const userRole = employeeRoles[emp_id] || 'Employee';
-                const userIcon = roleIcons[userRole] || {icon: '👤', icon_color: '#6b7280'};
-                
                 statusCard.innerHTML = `
-                    <div class="flex items-center gap-3 mb-3">
-                        <div class="relative">
-                            <div class="w-12 h-12 rounded-full bg-slate-700 flex items-center justify-center">
-                                <span class="text-lg">👤</span>
-                            </div>
-                            <div class="absolute -bottom-1 -right-1 w-6 h-6 rounded-full flex items-center justify-center text-sm profile-icon" 
-                                 style="background: ${userIcon.icon_color}; border: 2px solid rgba(255,255,255,0.8);">
-                                ${userIcon.icon}
-                            </div>
-                        </div>
-                        <div>
-                            <h3 class="font-semibold text-lg">${employeeName}</h3>
-                            <p class="text-sm text-white/60">${emp_id}</p>
-                        </div>
-                    </div>
+                    <h3 class="font-semibold text-lg">${employeeName} (${emp_id})</h3>
                     <p>Status: <span class="font-bold ${realtimeStatus[emp_id].status === 'Checked In' ? 'text-green-400' : 'text-red-400'}">${realtimeStatus[emp_id].status}</span></p>
                     <p>Duration: ${realtimeStatus[emp_id].duration}</p>
                 `;
@@ -6650,3 +6388,19 @@ async def download_order_polaroids(request: Request):
         raise HTTPException(status_code=400, detail="Invalid JSON format.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {e}")
+ 
+ #   - - - - - - - - - - - - - - - - - - - -   M A I N   E X E C U T I O N   - - - - - - - - - - - - - - - - - - - -  
+ i f   _ _ n a m e _ _   = =   " _ _ m a i n _ _ " : 
+         i m p o r t   u v i c o r n 
+         p r i n t ( "   S t a r t i n g   E r a y a   L u m e n   O r d e r s   W e b A p p . . . " ) 
+         p r i n t ( "   S e r v e r   w i l l   b e   a v a i l a b l e   a t :   h t t p : / / l o c a l h o s t : 8 0 0 0 " ) 
+         p r i n t ( "   N a v i g a t e   t o   / o r d e r s   t o   m a n a g e   y o u r   S h o p i f y   o r d e r s " ) 
+         p r i n t ( "     C o n f i g u r e   S h o p i f y   a t   / s h o p i f y / s e t t i n g s " ) 
+         
+         t r y : 
+                 u v i c o r n . r u n ( a p p ,   h o s t = " 0 . 0 . 0 . 0 " ,   p o r t = 8 0 0 0 ,   l o g _ l e v e l = " i n f o " ) 
+         e x c e p t   K e y b o a r d I n t e r r u p t : 
+                 p r i n t ( " \ n   S e r v e r   s t o p p e d   b y   u s e r " ) 
+         e x c e p t   E x c e p t i o n   a s   e : 
+                 p r i n t ( f "   S e r v e r   e r r o r :   { e } " )  
+ 
