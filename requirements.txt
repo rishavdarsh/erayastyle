@@ -1,16 +1,37 @@
+# Core FastAPI dependencies
 fastapi==0.110.0
 uvicorn[standard]==0.35.0
-pillow==11.0.0
-requests==2.31.0
-html2image==2.0.5
-pytz==2024.1
+jinja2==3.1.2
 python-multipart==0.0.9
+
+# Authentication dependencies (pinned for compatibility)
+passlib[bcrypt]==1.7.4
+bcrypt==3.2.2
+
+# Database dependencies
+sqlalchemy==2.0.23
+alembic==1.13.1
+
+# File handling and processing
+pillow==11.0.0
+aiofiles==23.2.1
+openpyxl==3.1.2
+
+# Data processing
 pandas==2.2.2; python_version < "3.13"
 pandas==2.2.3; python_version >= "3.13"
+
+# HTTP and networking
+requests==2.31.0
 urllib3==2.2.1
-openpyxl==3.1.2
+
+# Utilities
 python-dotenv==1.0.1
-aiofiles==23.2.1
-passlib[bcrypt]==1.7.4
+pytz==2024.1
+
+# HTML to image conversion
+html2image==2.0.5
+
+# Optional dependencies (commented out for compatibility)
 # aiohttp==3.9.1  # Temporarily disabled for Windows compatibility
 # zipstream-ng==1.3.1  # Removed for Windows compatibility
