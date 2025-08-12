@@ -1,0 +1,14 @@
+<div class="p-3 rounded glass cursor-move" data-task-id="{{ t.id }}" draggable="true">
+  <div class="flex items-center justify-between">
+    <div class="font-semibold text-sm">{{ t.title }}</div>
+    <span class="text-xs px-2 py-0.5 rounded chip">{{ t.priority }}</span>
+  </div>
+  {% if t.due_date %}
+  <div class="text-xs text-white/70 mt-1">Due: {{ t.due_date.strftime('%Y-%m-%d %H:%M') }}</div>
+  {% endif %}
+  {% if t.tags %}
+  <div class="text-[11px] text-white/70 mt-1">Tags: {{ ', '.join(t.tags) }}</div>
+  {% endif %}
+</div>
+
+

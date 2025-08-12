@@ -1,0 +1,81 @@
+{% extends "layout_base.html" %}
+{% block content %}
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+  <div class="p-4 glass rounded-xl">Due Today: {{ counts.due_today }}</div>
+  <div class="p-4 glass rounded-xl">In Progress: {{ counts.in_progress }}</div>
+  <div class="p-4 glass rounded-xl">In Review: {{ counts.review }}</div>
+  <div class="p-4 glass rounded-xl">Overdue: {{ counts.overdue }}</div>
+</div>
+
+<h2 class="text-lg font-semibold mb-2">Daily Tasks</h2>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8" id="board-daily" data-board="DAILY">
+  <div class="p-3 glass rounded-xl">
+    <h3 class="font-semibold mb-2">TODO</h3>
+    <div class="kanban-col space-y-2" data-status="TODO">
+      {% for t in my_daily if t.status == 'TODO' %}
+        {% include 'partials/task_card.html' with context %}
+      {% endfor %}
+    </div>
+  </div>
+  <div class="p-3 glass rounded-xl">
+    <h3 class="font-semibold mb-2">IN PROGRESS</h3>
+    <div class="kanban-col space-y-2" data-status="IN_PROGRESS">
+      {% for t in my_daily if t.status == 'IN_PROGRESS' %}
+        {% include 'partials/task_card.html' with context %}
+      {% endfor %}
+    </div>
+  </div>
+  <div class="p-3 glass rounded-xl">
+    <h3 class="font-semibold mb-2">DONE</h3>
+    <div class="kanban-col space-y-2" data-status="DONE">
+      {% for t in my_daily if t.status == 'DONE' %}
+        {% include 'partials/task_card.html' with context %}
+      {% endfor %}
+    </div>
+  </div>
+  
+  <!-- Hidden template reference variable -->
+  {% set board = 'DAILY' %}
+</div>
+
+<h2 class="text-lg font-semibold mb-2">Other Tasks</h2>
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4" id="board-other" data-board="OTHER">
+  <div class="p-3 glass rounded-xl">
+    <h3 class="font-semibold mb-2">BACKLOG</h3>
+    <div class="kanban-col space-y-2" data-status="BACKLOG">
+      {% for t in my_other if t.status == 'BACKLOG' %}
+        {% include 'partials/task_card.html' with context %}
+      {% endfor %}
+    </div>
+  </div>
+  <div class="p-3 glass rounded-xl">
+    <h3 class="font-semibold mb-2">IN PROGRESS</h3>
+    <div class="kanban-col space-y-2" data-status="IN_PROGRESS">
+      {% for t in my_other if t.status == 'IN_PROGRESS' %}
+        {% include 'partials/task_card.html' with context %}
+      {% endfor %}
+    </div>
+  </div>
+  <div class="p-3 glass rounded-xl">
+    <h3 class="font-semibold mb-2">REVIEW</h3>
+    <div class="kanban-col space-y-2" data-status="REVIEW">
+      {% for t in my_other if t.status == 'REVIEW' %}
+        {% include 'partials/task_card.html' with context %}
+      {% endfor %}
+    </div>
+  </div>
+  <div class="p-3 glass rounded-xl">
+    <h3 class="font-semibold mb-2">DONE</h3>
+    <div class="kanban-col space-y-2" data-status="DONE">
+      {% for t in my_other if t.status == 'DONE' %}
+        {% include 'partials/task_card.html' with context %}
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Hidden template reference variable -->
+  {% set board = 'OTHER' %}
+</div>
+{% endblock %}
+
+

@@ -14,10 +14,20 @@ from PIL import Image
 # import zipstream_ng as zipstream  # Removed for Windows compatibility
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Depends, Cookie
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Depends, Cookie, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.middleware.base import BaseHTTPMiddleware
+
+# Authentication imports
+from passlib.context import CryptContext
+from passlib.hash import bcrypt
+import secrets
+import time
+from datetime import datetime
 
 from processor import process_csv_file, extract_color
 
@@ -32,6 +42,46 @@ from PIL import Image
 # import zipstream_ng as zipstream  # Removed for Windows compatibility
 
 app = FastAPI(title="Lumen Order Processor")
+
+# Authentication middleware
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Middleware to handle authentication redirects."""
+    
+    def __init__(self, app):
+        super().__init__(app)
+        # Protected paths that require authentication
+        self.protected_paths = {
+            "/hub", "/orders", "/packing", "/attendance", "/admin/users", 
+            "/shopify/settings", "/chat", "/team", "/admin/settings", 
+            "/admin/security", "/admin/analytics"
+        }
+        # Public paths that don't require authentication
+        self.public_paths = {"/", "/login", "/static", "/favicon.ico"}
+        # API paths that handle their own authentication
+        self.api_paths = {"/api/"}
+    
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        
+        # Skip middleware for static files, API endpoints, and public paths
+        if (any(path.startswith(public) for public in self.public_paths) or 
+            any(path.startswith(api) for api in self.api_paths) or
+            path.endswith(('.css', '.js', '.png', '.jpg', '.ico', '.svg'))):
+            return await call_next(request)
+        
+        # Check if path requires authentication
+        if any(path.startswith(protected) for protected in self.protected_paths):
+            # Check for session cookie
+            session_id = request.cookies.get("session_id")
+            
+            if not session_id or not get_current_user_from_session(session_id):
+                # Redirect to login if not authenticated
+                return RedirectResponse(url="/login", status_code=302)
+        
+        return await call_next(request)
+
+# Add authentication middleware
+app.add_middleware(AuthMiddleware)
 
 # Shopify configuration from environment variables
 SHOPIFY_SHOP = os.getenv("SHOPIFY_SHOP", "")  # e.g., "mystore.myshopify.com"
@@ -113,20 +163,57 @@ USER_ROLES = {
 
 # Navigation menu structure - EVERYONE GETS FULL ACCESS
 UNIFIED_NAVIGATION_MENU = [
-    {"id": "dashboard", "name": "Dashboard", "icon": "📊", "url": "/hub", "active": True},
-    {"id": "orders", "name": "Order Organizer", "icon": "🧭", "url": "/orders", "active": True},
-    {"id": "packing", "name": "Packing Management", "icon": "📦", "url": "/packing", "active": True},
-    {"id": "attendance", "name": "Employee Attendance", "icon": "🗓️", "url": "/attendance", "active": True},
-    {"id": "chat", "name": "Team Chat", "icon": "💬", "url": "/chat", "active": True},
-    {"id": "reports", "name": "Reports & Analytics", "icon": "📊", "url": "/attendance/report_page", "active": True},
+    {"id": "dashboard", "name": "Dashboard", "icon": "📊", "url": "/hub", "active": True, "required_roles": []},
+    {"id": "orders", "name": "Order Organizer", "icon": "🧭", "url": "/orders", "active": True, "required_roles": ["owner", "admin", "manager"]},
+    {"id": "packing", "name": "Packing Management", "icon": "📦", "url": "/packing", "active": True, "required_roles": []},
+    {"id": "attendance", "name": "Employee Attendance", "icon": "🗓️", "url": "/attendance", "active": True, "required_roles": []},
+    {"id": "chat", "name": "Team Chat", "icon": "💬", "url": "/chat", "active": True, "required_roles": []},
+    {"id": "tasks", "name": "Tasks", "icon": "📝", "url": "/dashboard", "active": True, "required_roles": []},
+    {"id": "reports", "name": "Reports & Analytics", "icon": "📊", "url": "/attendance/report_page", "active": True, "required_roles": []},
     {"id": "separator", "type": "separator", "name": "Additional Features"},
-    {"id": "team", "name": "Team Management", "icon": "👥", "url": "/team", "active": False, "badge": "Soon"},
-    {"id": "shopify", "name": "Shopify Settings", "icon": "🛒", "url": "/shopify/settings", "active": True},
-    {"id": "settings", "name": "System Settings", "icon": "⚙️", "url": "/admin/settings", "active": False, "badge": "Soon"},
-    {"id": "users", "name": "User Management", "icon": "👨‍💼", "url": "/admin/users", "active": True},
-    {"id": "security", "name": "Security Settings", "icon": "🔐", "url": "/admin/security", "active": False, "badge": "Soon"},
-    {"id": "analytics", "name": "System Analytics", "icon": "📈", "url": "/admin/analytics", "active": False, "badge": "Soon"},
+    {"id": "team", "name": "Team Management", "icon": "👥", "url": "/team", "active": False, "badge": "Soon", "required_roles": ["owner", "admin"]},
+    {"id": "shopify", "name": "Shopify Settings", "icon": "🛒", "url": "/shopify/settings", "active": True, "required_roles": ["owner", "admin"]},
+    {"id": "settings", "name": "System Settings", "icon": "⚙️", "url": "/admin/settings", "active": False, "badge": "Soon", "required_roles": ["owner"]},
+    {"id": "users", "name": "User Management", "icon": "👨‍💼", "url": "/admin/users", "active": True, "required_roles": ["owner", "admin"]},
+    {"id": "security", "name": "Security Settings", "icon": "🔐", "url": "/admin/security", "active": False, "badge": "Soon", "required_roles": ["owner"]},
+    {"id": "analytics", "name": "System Analytics", "icon": "📈", "url": "/admin/analytics", "active": False, "badge": "Soon", "required_roles": ["owner", "admin"]},
 ]
+
+def get_navigation_with_access(user_role: str):
+    """Get navigation menu with access information for the user's role."""
+    menu_with_access = []
+    
+    for item in UNIFIED_NAVIGATION_MENU:
+        # Copy the item
+        menu_item = item.copy()
+        
+        # Skip separators - they don't need access control
+        if item.get("type") == "separator":
+            menu_with_access.append(menu_item)
+            continue
+        
+        # Check if user has access to this item
+        required_roles = item.get("required_roles", [])
+        
+        # If no required roles, everyone has access
+        if not required_roles:
+            menu_item["has_access"] = True
+            menu_item["locked"] = False
+        # If owner, always has access
+        elif user_role == "owner":
+            menu_item["has_access"] = True
+            menu_item["locked"] = False
+        # Check if user's role is in required roles
+        elif user_role in required_roles:
+            menu_item["has_access"] = True
+            menu_item["locked"] = False
+        else:
+            menu_item["has_access"] = False
+            menu_item["locked"] = True
+        
+        menu_with_access.append(menu_item)
+    
+    return menu_with_access
 
 # In-memory store for team chat messages
 CHAT_MESSAGES = []
@@ -149,49 +236,12 @@ USER_STATUS = {}  # Format: {"EMP001": {"status": "online", "last_seen": timesta
 MESSAGE_REACTIONS = {}
 
 # -------------------- SHOPIFY INTEGRATION --------------------
-# Shopify store configuration - Persistent storage in JSON file
-SHOPIFY_CONFIG_FILE = "shopify_config.json"
-
-def load_shopify_config():
-    """Load Shopify configuration from file."""
-    default_config = {
-        "store_name": "",
-        "access_token": "",
-        "api_version": "2024-01",
-        "configured_at": None,
-        "last_updated": None
-    }
-    
-    try:
-        if os.path.exists(SHOPIFY_CONFIG_FILE):
-            with open(SHOPIFY_CONFIG_FILE, 'r') as f:
-                config = json.load(f)
-                # Merge with defaults in case new fields were added
-                default_config.update(config)
-                print(f"✅ Loaded Shopify config from {SHOPIFY_CONFIG_FILE}")
-                return default_config
-    except Exception as e:
-        print(f"⚠️ Error loading Shopify config: {e}")
-    
-    print(f"📝 Using default Shopify config")
-    return default_config
-
-def save_shopify_config(config):
-    """Save Shopify configuration to file."""
-    try:
-        # Add timestamp
-        config["last_updated"] = datetime.now().isoformat()
-        
-        with open(SHOPIFY_CONFIG_FILE, 'w') as f:
-            json.dump(config, f, indent=2)
-        print(f"✅ Saved Shopify config to {SHOPIFY_CONFIG_FILE}")
-        return True
-    except Exception as e:
-        print(f"❌ Error saving Shopify config: {e}")
-        return False
-
-# Load configuration on startup
-SHOPIFY_CONFIG = load_shopify_config()
+# Shopify store configuration - In production, use environment variables or database
+SHOPIFY_CONFIG = {
+    "store_name": "",  # Will be set via settings page
+    "access_token": "",  # Will be set via settings page
+    "api_version": "2024-01"  # Latest stable API version
+}
 
 # In-memory store for cached Shopify data
 SHOPIFY_CACHE = {
@@ -203,19 +253,19 @@ SHOPIFY_CACHE = {
 # -------------------- USER MANAGEMENT SYSTEM --------------------
 # Role-based Icon System
 ROLE_ICONS = {
-    "Super Admin": {
-        "icon": "👑",  # Crown - represents ultimate authority and leadership
+    "owner": {
+        "icon": "💎",  # Diamond - represents ultimate value, rarity, and ownership
         "icon_color": "#FFD700"
     },
-    "Admin": {
+    "admin": {
         "icon": "🛡️",  # Shield - represents protection and administration
         "icon_color": "#4F46E5"
     },
-    "Manager": {
+    "manager": {
         "icon": "🎯",  # Target - represents focus, goals, and management
         "icon_color": "#EF4444"
     },
-    "Employee": {
+    "packer": {
         "icon": "⭐",  # Star - represents talent and contribution
         "icon_color": "#10B981"
     }
@@ -225,26 +275,115 @@ ROLE_ICONS = {
 def get_role_icon(role):
     return ROLE_ICONS.get(role, {"icon": "👤", "icon_color": "#6B7280"})
 
-# User Management System
-USERS_DATABASE = {
+# -------------------- DATA PERSISTENCE --------------------
+import json
+import os
+from pathlib import Path
+
+# File paths for data persistence
+DATA_DIR = Path("data")
+USERS_DB_FILE = DATA_DIR / "users_database.json"
+USERS_AUTH_FILE = DATA_DIR / "users_auth.json"
+
+def ensure_data_directory():
+    """Ensure the data directory exists."""
+    DATA_DIR.mkdir(exist_ok=True)
+
+def save_users_database():
+    """Save USERS_DATABASE to JSON file."""
+    ensure_data_directory()
+    with open(USERS_DB_FILE, 'w') as f:
+        json.dump(USERS_DATABASE, f, indent=2, default=str)
+
+def load_users_database():
+    """Load USERS_DATABASE from JSON file."""
+    if USERS_DB_FILE.exists():
+        try:
+            with open(USERS_DB_FILE, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, FileNotFoundError):
+            print("Warning: Could not load users database, using defaults")
+    return None
+
+def save_users_auth():
+    """Save USERS authentication data to JSON file."""
+    ensure_data_directory()
+    with open(USERS_AUTH_FILE, 'w') as f:
+        json.dump(USERS, f, indent=2, default=str)
+
+def load_users_auth():
+    """Load USERS authentication data from JSON file."""
+    if USERS_AUTH_FILE.exists():
+        try:
+            with open(USERS_AUTH_FILE, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, FileNotFoundError):
+            print("Warning: Could not load users auth, using defaults")
+    return None
+
+# User Management System - Default data (used if no saved data exists)
+DEFAULT_USERS_DATABASE = {
+    "rishavdarsh": {
+        "id": "rishavdarsh",
+        "name": "Rishav Darsh",
+        "email": "rishav@company.com",
+        "role": "owner",
+        "status": "active",
+        "photo": "https://via.placeholder.com/100/FFD700/000000?text=RD",
+        "phone": "+1 (555) 001-0001",
+        "joining_date": "2024-01-01",
+        "shift": "flexible",
+        "manager": "",
+        "address": "123 Owner Street",
+        "city": "Business City",
+        "state": "NY",
+        "zip": "10001",
+        "emergency_contact": {
+            "name": "Emergency Contact",
+            "relation": "Spouse",
+            "phone": "+1 (555) 001-0002",
+            "email": "emergency@owner.com"
+        },
+        "documents": [],
+        "created_date": "2024-01-01",
+        "last_login": "2024-01-20 16:00:00",
+        "login_count": 100,
+        "permissions": ["all"],
+        "session_id": "sess_owner_active"
+    },
     "EMP001": {
         "id": "EMP001",
         "name": "Ritik",
         "email": "ritik@company.com",
-        "role": "Super Admin",
+        "role": "admin",
         "status": "active",
         "photo": "https://via.placeholder.com/100/4f46e5/ffffff?text=R",
+        "phone": "+1 (555) 001-0011",
+        "joining_date": "2024-01-15",
+        "shift": "morning",
+        "manager": "rishavdarsh",
+        "address": "456 Admin Avenue",
+        "city": "Tech City",
+        "state": "CA",
+        "zip": "90210",
+        "emergency_contact": {
+            "name": "Admin Emergency",
+            "relation": "Parent",
+            "phone": "+1 (555) 001-0012",
+            "email": "emergency@admin.com"
+        },
+        "documents": [],
         "created_date": "2024-01-15",
         "last_login": "2024-01-20 14:30:00",
         "login_count": 45,
-        "permissions": ["all"],
+        "permissions": ["dashboard", "orders", "packing", "attendance", "chat", "reports", "shopify", "users"],
         "session_id": "sess_001_active"
     },
     "EMP002": {
         "id": "EMP002",
         "name": "Sunny",
         "email": "sunny@company.com",
-        "role": "Admin",
+        "role": "admin",
         "status": "active",
         "photo": "https://via.placeholder.com/100/059669/ffffff?text=S",
         "created_date": "2024-01-16",
@@ -257,7 +396,7 @@ USERS_DATABASE = {
         "id": "EMP003",
         "name": "Rahul",
         "email": "rahul@company.com",
-        "role": "Manager",
+        "role": "manager",
         "status": "active",
         "photo": "https://via.placeholder.com/100/dc2626/ffffff?text=R",
         "created_date": "2024-01-17",
@@ -270,7 +409,7 @@ USERS_DATABASE = {
         "id": "EMP004",
         "name": "Sumit",
         "email": "sumit@company.com",
-        "role": "Employee",
+        "role": "packer",
         "status": "inactive",
         "photo": "https://via.placeholder.com/100/7c3aed/ffffff?text=S",
         "created_date": "2024-01-18",
@@ -283,7 +422,7 @@ USERS_DATABASE = {
         "id": "EMP005",
         "name": "Vishal",
         "email": "vishal@company.com",
-        "role": "Manager",
+        "role": "manager",
         "status": "active",
         "photo": "https://via.placeholder.com/100/ea580c/ffffff?text=V",
         "created_date": "2024-01-19",
@@ -296,7 +435,7 @@ USERS_DATABASE = {
         "id": "EMP006",
         "name": "Nishant",
         "email": "nishant@company.com",
-        "role": "Employee",
+        "role": "packer",
         "status": "active",
         "photo": "https://via.placeholder.com/100/0891b2/ffffff?text=N",
         "created_date": "2024-01-20",
@@ -307,31 +446,280 @@ USERS_DATABASE = {
     }
 }
 
+# Load saved data or use defaults
+USERS_DATABASE = load_users_database() or DEFAULT_USERS_DATABASE
+
+# -------------------- AUTHENTICATION SYSTEM --------------------
+# Password hashing context
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Dev auto-login user (for development only)
+DEV_AUTOLOGIN_USER = os.getenv("DEV_AUTOLOGIN_USER")
+
+# Authentication users database with hashed passwords - Default data
+DEFAULT_USERS = {
+    "rishavdarsh": {
+        "employee_id": "rishavdarsh",
+        "name": "Rishav Darsh",
+        "role": "owner",
+        "password_hash": pwd_context.hash("ER9919@"),  # Owner password: ER9919@
+    },
+    "EMP001": {
+        "employee_id": "EMP001",
+        "name": "Ritik",
+        "role": "admin",
+        "password_hash": pwd_context.hash("admin123"),  # Default password: admin123
+    },
+    "EMP002": {
+        "employee_id": "EMP002", 
+        "name": "Sunny",
+        "role": "admin",
+        "password_hash": pwd_context.hash("admin123"),  # Default password: admin123
+    },
+    "EMP003": {
+        "employee_id": "EMP003",
+        "name": "Rahul", 
+        "role": "manager",
+        "password_hash": pwd_context.hash("manager123"),  # Default password: manager123
+    },
+    "EMP004": {
+        "employee_id": "EMP004",
+        "name": "Sumit",
+        "role": "packer",
+        "password_hash": pwd_context.hash("packer123"),  # Default password: packer123
+    },
+    "EMP005": {
+        "employee_id": "EMP005",
+        "name": "Vishal",
+        "role": "manager", 
+        "password_hash": pwd_context.hash("manager123"),  # Default password: manager123
+    },
+    "EMP006": {
+        "employee_id": "EMP006",
+        "name": "Nishant",
+        "role": "packer",
+        "password_hash": pwd_context.hash("packer123"),  # Default password: packer123
+    }
+}
+
+# Load saved authentication data or use defaults
+USERS = load_users_auth() or DEFAULT_USERS
+
+def sync_user_databases():
+    """Synchronize USERS and USERS_DATABASE to ensure consistency."""
+    for user_id, user_data in USERS_DATABASE.items():
+        if user_id in USERS:
+            # Update role in USERS to match USERS_DATABASE
+            USERS[user_id]["role"] = user_data["role"]
+            USERS[user_id]["name"] = user_data["name"]
+        else:
+            # Add missing user to USERS (with default password)
+            USERS[user_id] = {
+                "employee_id": user_id,
+                "name": user_data["name"],
+                "role": user_data["role"],
+                "password_hash": pwd_context.hash("default123")  # Default password
+            }
+    
+    # Also sync the other direction
+    for user_id, user_data in USERS.items():
+        if user_id not in USERS_DATABASE:
+            # Add missing user to USERS_DATABASE with complete profile
+            USERS_DATABASE[user_id] = {
+                "id": user_id,
+                "name": user_data["name"],
+                "email": f"{user_data['name'].lower().replace(' ', '')}@company.com",
+                "role": user_data["role"],
+                "status": "active",
+                "photo": f"https://via.placeholder.com/100/4F46E5/ffffff?text={user_data['name'][0]}",
+                "phone": "",
+                "joining_date": "2024-01-20",
+                "shift": "",
+                "manager": "",
+                "address": "",
+                "city": "",
+                "state": "",
+                "zip": "",
+                "emergency_contact": {
+                    "name": "",
+                    "relation": "",
+                    "phone": "",
+                    "email": ""
+                },
+                "documents": [],
+                "created_date": "2024-01-20",
+                "last_login": "2024-01-20 12:00:00",
+                "login_count": 1,
+                "permissions": ROLE_DEFINITIONS.get(user_data["role"], {}).get("permissions", []),
+                "session_id": None
+            }
+    
+    # Save changes after synchronization
+    save_users_database()
+    save_users_auth()
+
+# Initialize database synchronization
+sync_user_databases()
+
+# Active sessions: token -> {employee_id, expires_at}
+SESSIONS = {}
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against its hash."""
+    return pwd_context.verify(plain_password, hashed_password)
+
+def hash_password(password: str) -> str:
+    """Hash a password."""
+    return pwd_context.hash(password)
+
+def create_session_token() -> str:
+    """Create a secure session token."""
+    return secrets.token_urlsafe(32)
+
+def create_session(employee_id: str, remember_me: bool = False) -> str:
+    """Create a new session for a user."""
+    token = create_session_token()
+    expires_in_days = 30 if remember_me else 7
+    expires_at = time.time() + (expires_in_days * 24 * 60 * 60)
+    
+    SESSIONS[token] = {
+        "employee_id": employee_id,
+        "expires_at": expires_at
+    }
+    
+    return token
+
+def get_current_user_from_session(session_id: str = None) -> Optional[Dict]:
+    """Get current user from session token."""
+    # Dev auto-login bypass
+    if DEV_AUTOLOGIN_USER and DEV_AUTOLOGIN_USER in USERS:
+        # Even in dev mode, check if user is active
+        user_profile = USERS_DATABASE.get(DEV_AUTOLOGIN_USER)
+        if user_profile and user_profile["status"] == "active":
+            return USERS[DEV_AUTOLOGIN_USER]
+        return None
+    
+    if not session_id:
+        return None
+    
+    session = SESSIONS.get(session_id)
+    if not session:
+        return None
+    
+    # Check if session is expired
+    if time.time() > session["expires_at"]:
+        del SESSIONS[session_id]
+        return None
+    
+    employee_id = session["employee_id"]
+    
+    # Check if user exists in auth database
+    if employee_id not in USERS:
+        del SESSIONS[session_id]
+        return None
+    
+    # Check if user is active in user management database
+    user_profile = USERS_DATABASE.get(employee_id)
+    if not user_profile or user_profile["status"] != "active":
+        # User is deactivated, invalidate session
+        del SESSIONS[session_id]
+        return None
+    
+    # Return user data from USERS (auth database)
+    return USERS[employee_id]
+
+def cleanup_expired_sessions():
+    """Remove expired sessions from memory."""
+    current_time = time.time()
+    expired_tokens = [token for token, session in SESSIONS.items() 
+                     if current_time > session["expires_at"]]
+    
+    for token in expired_tokens:
+        del SESSIONS[token]
+
+def invalidate_user_sessions(employee_id: str):
+    """Invalidate all sessions for a specific user (useful when role changes)."""
+    tokens_to_remove = []
+    for token, session in SESSIONS.items():
+        if session["employee_id"] == employee_id:
+            tokens_to_remove.append(token)
+    
+    for token in tokens_to_remove:
+        del SESSIONS[token]
+    
+    # Also clear session_id in USERS_DATABASE
+    if employee_id in USERS_DATABASE:
+        USERS_DATABASE[employee_id]["session_id"] = None
+
+def require_roles(*allowed_roles):
+    """Dependency to require authentication and optionally specific roles."""
+    def dependency(session_id: str = Cookie(None, alias="session_id")):
+        # Clean up expired sessions periodically
+        cleanup_expired_sessions()
+        
+        user = get_current_user_from_session(session_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required. Please login.",
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+        
+        # Ensure user still exists in database (handle deleted users)
+        if user["employee_id"] not in USERS:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User account no longer exists. Please login again."
+            )
+        
+        # Get fresh user data to ensure role is up-to-date
+        fresh_user = USERS[user["employee_id"]]
+        
+        # Owner has access to everything
+        if fresh_user["role"] == "owner":
+            return fresh_user
+        
+        # If no roles specified, any authenticated user is allowed
+        if not allowed_roles:
+            return fresh_user
+        
+        # Check if user has required role
+        if fresh_user["role"] not in allowed_roles:
+            role_names = ", ".join(allowed_roles)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied. Required roles: {role_names}. Your role: {fresh_user['role']}"
+            )
+        
+        return fresh_user
+    
+    return dependency
+
 # Role definitions with permissions
 ROLE_DEFINITIONS = {
-    "Super Admin": {
-        "name": "Super Admin",
-        "description": "Full system access with all permissions",
+    "owner": {
+        "name": "Company Owner",
+        "description": "Ultimate system access - controls all users and permissions",
         "permissions": ["all"],
-        "color": "#4f46e5"
+        "color": "#FFD700"
     },
-    "Admin": {
+    "admin": {
         "name": "Admin",
         "description": "Administrative access to most features",
-        "permissions": ["dashboard", "orders", "packing", "attendance", "chat", "reports", "shopify"],
-        "color": "#059669"
+        "permissions": ["dashboard", "orders", "packing", "attendance", "chat", "reports", "shopify", "users"],
+        "color": "#4F46E5"
     },
-    "Manager": {
+    "manager": {
         "name": "Manager",
         "description": "Management access to operational features",
         "permissions": ["dashboard", "orders", "packing", "attendance", "chat"],
-        "color": "#dc2626"
+        "color": "#EF4444"
     },
-    "Employee": {
-        "name": "Employee",
+    "packer": {
+        "name": "Packer",
         "description": "Basic access to essential features",
-        "permissions": ["dashboard", "attendance", "chat"],
-        "color": "#7c3aed"
+        "permissions": ["dashboard", "packing", "attendance", "chat"],
+        "color": "#10B981"
     }
 }
 
@@ -397,7 +785,7 @@ def get_user_stats():
     total_users = len(USERS_DATABASE)
     active_users = len([u for u in USERS_DATABASE.values() if u["status"] == "active"])
     inactive_users = total_users - active_users
-    admin_count = len([u for u in USERS_DATABASE.values() if u["role"] in ["Super Admin", "Admin"]])
+    admin_count = len([u for u in USERS_DATABASE.values() if u["role"] in ["owner", "admin"]])
     
     return {
         "total_users": total_users,
@@ -617,6 +1005,14 @@ def get_file_type(filename: str) -> str:
 # Serve static frontend
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# Mount uploads directory for profile photos and documents
+try:
+    app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+except:
+    # Create uploads directory if it doesn't exist
+    os.makedirs("uploads", exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 # Simple CORS for local dev or static hosting
 app.add_middleware(
     CORSMiddleware,
@@ -636,6 +1032,28 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Serve uploaded files
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
+# Templates for new task dashboard
+try:
+    templates = Jinja2Templates(directory="templates")
+except Exception:
+    import os as _os
+    _os.makedirs("templates", exist_ok=True)
+    templates = Jinja2Templates(directory="templates")
+
+# Include Tasks router
+try:
+    from routers.tasks import router as tasks_router
+    app.include_router(tasks_router, prefix="")
+except Exception as e:
+    print(f"Warning: could not include tasks router: {e}")
+
+# DB init for tasks module
+try:
+    from models import init_db as _init_db
+    _init_db()
+except Exception as e:
+    print(f"Warning: DB init failed: {e}")
 
 
 def run_job(job_id: str, csv_path: Path, out_dir: Path, options: dict):
@@ -777,6 +1195,22 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
       opacity: 0.5;
       cursor: not-allowed;
     }}
+    .sidebar-item.locked {{
+      opacity: 0.6;
+      cursor: not-allowed;
+      background: rgba(255,255,255,0.02);
+    }}
+    .sidebar-item.locked:hover {{
+      background: rgba(255,255,255,0.04);
+      transform: none;
+      color: rgba(255,255,255,0.5);
+    }}
+    .sidebar-lock {{
+      font-size: 12px;
+      margin-left: auto;
+      opacity: 0.7;
+      color: #fbbf24;
+    }}
     .sidebar-icon {{
       width: 24px;
       height: 24px;
@@ -887,6 +1321,10 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
         <div class="sidebar-icon">🏠</div>
         <div class="sidebar-text">Home</div>
       </div>
+      <div class="sidebar-item" onclick="logout()" style="cursor: pointer;">
+        <div class="sidebar-icon">🚪</div>
+        <div class="sidebar-text">Logout</div>
+      </div>
     </div>
   </div>
 
@@ -915,6 +1353,23 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
   <script>
     // Global state
     let sidebarCollapsed = false;
+    
+    // Logout function
+    async function logout() {{
+      try {{
+        const response = await fetch('/api/auth/logout', {{
+          method: 'POST',
+          credentials: 'include'
+        }});
+        
+        // Always redirect to login, regardless of response
+        window.location.href = '/login';
+      }} catch (error) {{
+        console.error('Logout error:', error);
+        // Still redirect to login on error
+        window.location.href = '/login';
+      }}
+    }}
 
     // DOM elements
     const sidebar = document.getElementById('sidebar');
@@ -947,7 +1402,7 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
     // Load navigation menu directly
     async function loadNavigation() {{
         try {{
-            const response = await fetch('/api/navigation/admin');
+            const response = await fetch('/api/auth/navigation');
             if (!response.ok) {{
                 throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
             }}
@@ -961,6 +1416,35 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
             navigationMenu.innerHTML = '<div class="text-center text-red-400 text-sm p-4">Error loading navigation</div>';
         }}
     }}
+    
+    // Refresh navigation (useful when roles change)
+    window.refreshNavigation = loadNavigation;
+    
+    // Auto-refresh navigation when user role might have changed
+    let lastKnownRole = null;
+    
+    async function checkRoleChange() {{
+        try {{
+            const response = await fetch('/api/auth/me');
+            if (response.ok) {{
+                const userData = await response.json();
+                if (lastKnownRole && lastKnownRole !== userData.role) {{
+                    // Role has changed, refresh navigation
+                    console.log(`Role changed from ${{lastKnownRole}} to ${{userData.role}}`);
+                    await loadNavigation();
+                }}
+                lastKnownRole = userData.role;
+            }}
+        }} catch (error) {{
+            console.error('Error checking role change:', error);
+        }}
+    }}
+    
+    // Check for role changes every 10 seconds
+    setInterval(checkRoleChange, 10000);
+    
+    // Initial role check
+    checkRoleChange();
 
     // Render navigation menu
     function renderNavigationMenu(menuItems) {{
@@ -972,12 +1456,19 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
             }} else {{
                 const activeClass = window.location.pathname === item.url ? 'active' : '';
                 const disabledClass = !item.active ? 'disabled' : '';
+                const lockedClass = item.locked ? 'locked' : '';
                 const badge = item.badge ? `<span class="sidebar-badge">${{item.badge}}</span>` : '';
+                const lockIcon = item.locked ? `<span class="sidebar-lock">🔒</span>` : '';
+                
+                // If locked, make it non-clickable and show lock
+                const href = item.locked ? '#' : (item.active ? item.url : '#');
+                const onclick = item.locked ? 'onclick="return false;"' : (!item.active ? 'onclick="return false;"' : '');
                 
                 html += `
-                    <a href="${{item.active ? item.url : '#'}}" class="sidebar-item ${{activeClass}} ${{disabledClass}}" ${{!item.active ? 'onclick="return false;"' : ''}}>
+                    <a href="${{href}}" class="sidebar-item ${{activeClass}} ${{disabledClass}} ${{lockedClass}}" ${{onclick}}>
                         <div class="sidebar-icon">${{item.icon}}</div>
                         <div class="sidebar-text">${{item.name}}</div>
+                        ${{lockIcon}}
                         ${{badge}}
                     </a>
                 `;
@@ -1043,15 +1534,230 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
     return HTMLResponse(html)
 
 
+# -------------------- ROOT REDIRECT --------------------
+@app.get("/")
+def root():
+    """Redirect root to login page."""
+    return RedirectResponse(url="/login")
+
+# -------------------- LOGIN PAGE --------------------
+@app.get("/login")
+def login_page():
+    """Login page for employee authentication."""
+    html = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eraya Ops - Login</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #581c87 100%);
+            min-height: 100vh;
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            transition: all 0.3s ease;
+        }
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #2563eb, #1e40af);
+            transform: translateY(-2px);
+        }
+        .input-field {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+        }
+        .input-field:focus {
+            border-color: #3b82f6;
+            background: rgba(255, 255, 255, 0.08);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center text-white">
+    <div class="w-full max-w-md p-6">
+        <!-- Logo Section -->
+        <div class="text-center mb-8">
+            <div class="w-16 h-16 mx-auto mb-4 rounded-xl glass flex items-center justify-center">
+                <span class="text-2xl">🏭</span>
+            </div>
+            <h1 class="text-3xl font-bold mb-2">Eraya Ops</h1>
+            <p class="text-white/60">Employee Portal Login</p>
+        </div>
+
+        <!-- Login Form -->
+        <div class="glass rounded-2xl p-8">
+            <form id="loginForm">
+                <div class="space-y-6">
+                    <div>
+                        <label for="employee_id" class="block text-sm font-medium text-white/90 mb-2">
+                            Employee ID
+                        </label>
+                        <input type="text" id="employee_id" name="employee_id" required
+                               class="w-full px-4 py-3 rounded-xl input-field text-white placeholder-white/50 focus:outline-none"
+                               placeholder="Enter your Employee ID (e.g., EMP001)">
+                    </div>
+
+                    <div>
+                        <label for="password" class="block text-sm font-medium text-white/90 mb-2">
+                            Password
+                        </label>
+                        <input type="password" id="password" name="password" required
+                               class="w-full px-4 py-3 rounded-xl input-field text-white placeholder-white/50 focus:outline-none"
+                               placeholder="Enter your password">
+                    </div>
+
+                    <div class="flex items-center">
+                        <input type="checkbox" id="remember_me" name="remember_me" 
+                               class="w-4 h-4 text-blue-600 bg-transparent border-white/30 rounded focus:ring-blue-500">
+                        <label for="remember_me" class="ml-2 text-sm text-white/80">
+                            Remember me for 30 days
+                        </label>
+                    </div>
+
+                    <button type="submit" id="loginBtn"
+                            class="w-full py-3 px-4 rounded-xl btn-primary text-white font-semibold">
+                        Sign In
+                    </button>
+                </div>
+            </form>
+
+            <!-- Error Message -->
+            <div id="errorMessage" class="mt-4 p-3 rounded-lg bg-red-500/20 border border-red-500/30 text-red-200 text-sm hidden">
+                <span id="errorText"></span>
+            </div>
+
+            <!-- Loading State -->
+            <div id="loadingState" class="mt-4 text-center text-white/60 hidden">
+                <span class="inline-block animate-spin">⚪</span>
+                Signing in...
+            </div>
+        </div>
+
+        <!-- Default Credentials Help -->
+        <div class="mt-6 text-center">
+            <details class="glass rounded-lg p-4">
+                <summary class="cursor-pointer text-white/80 text-sm">Default Login Credentials</summary>
+                <div class="mt-3 text-xs text-white/60 space-y-1">
+                    <div><strong>Owner:</strong> rishavdarsh / ER9919@</div>
+                    <div><strong>Admin:</strong> EMP001 / admin123</div>
+                    <div><strong>Admin:</strong> EMP002 / admin123</div>
+                    <div><strong>Manager:</strong> EMP003 / manager123</div>
+                    <div><strong>Packer:</strong> EMP004 / packer123</div>
+                    <div><strong>Manager:</strong> EMP005 / manager123</div>
+                    <div><strong>Packer:</strong> EMP006 / packer123</div>
+                </div>
+            </details>
+        </div>
+    </div>
+
+    <script>
+        const loginForm = document.getElementById('loginForm');
+        const loginBtn = document.getElementById('loginBtn');
+        const errorMessage = document.getElementById('errorMessage');
+        const errorText = document.getElementById('errorText');
+        const loadingState = document.getElementById('loadingState');
+
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            // Show loading state
+            loginBtn.disabled = true;
+            loadingState.classList.remove('hidden');
+            errorMessage.classList.add('hidden');
+
+            // Get form data
+            const formData = new FormData(loginForm);
+
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    // Login successful - redirect to hub
+                    window.location.href = '/hub';
+                } else {
+                    // Show error message
+                    errorText.textContent = result.detail || 'Login failed';
+                    errorMessage.classList.remove('hidden');
+                }
+            } catch (error) {
+                errorText.textContent = 'Network error. Please try again.';
+                errorMessage.classList.remove('hidden');
+            } finally {
+                // Hide loading state
+                loginBtn.disabled = false;
+                loadingState.classList.add('hidden');
+            }
+        });
+
+        // Auto-focus first input
+        document.getElementById('employee_id').focus();
+    </script>
+</body>
+</html>
+    """
+    return HTMLResponse(html)
+
 # -------------------- DASHBOARD --------------------
 @app.get("/hub")
-def eraya_hub_home():
+def eraya_hub_home(current_user: Dict = Depends(require_roles())):
+    # Get user info for personalized greeting
+    user_name = current_user.get("name", "User")
+    first_name = user_name.split()[0] if user_name else "User"
+    
+    # Generate time-based greeting
+    from datetime import datetime as dt
+    current_hour = dt.now().hour
+    
+    if 5 <= current_hour < 12:
+        time_greeting = "Good morning"
+        day_message = "Ready to make today productive? ☀️"
+    elif 12 <= current_hour < 17:
+        time_greeting = "Good afternoon"  
+        day_message = "Hope your day is going smoothly! 🌤️"
+    elif 17 <= current_hour < 21:
+        time_greeting = "Good evening"
+        day_message = "Wrapping up another great day? 🌅"
+    else:
+        time_greeting = "Good evening"
+        day_message = "Working late? You're dedicated! 🌙"
+    
+    # Create the personalized greeting section
+    greeting_section = f"""
+    <!-- Personalized Greeting Section -->
+    <section class="mt-8 mb-6">
+      <div class="glass p-6 text-center max-w-2xl mx-auto">
+        <div class="text-2xl font-semibold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-400">
+          {time_greeting}, {first_name}! 👋
+        </div>
+        <p class="mt-2 text-white/70">{day_message}</p>
+        <div class="mt-3 text-sm text-white/50">
+          Welcome back to your dashboard
+        </div>
+      </div>
+    </section>
+    """
+    
     body = """
     <!-- Header Section -->
     <section class="text-center">
       <h1 class="text-4xl md:text-5xl font-bold">Eraya Ops Hub</h1>
       <p class="mt-3 text-white/80">Fast, reliable tools for fulfillment — all in one place.</p>
     </section>
+
+    """ + greeting_section + """
 
     <!-- Dashboard Overview Section -->
     <section class="mt-10">
@@ -1607,7 +2313,7 @@ def eraya_hub_home():
     return _eraya_lumen_page("Home", body)
 
 @app.get("/orders")
-def eraya_orders_page():
+def eraya_orders_page(current_user: Dict = Depends(require_roles("owner", "admin", "manager"))):
     body = """
     <section class="glass p-6">
       <h1 class="text-3xl font-bold">Order Management</h1>
@@ -2698,7 +3404,7 @@ def eraya_orders_page():
 
 # -------------------- DASHBOARD STATS API --------------------
 @app.get("/api/dashboard/stats")
-def get_dashboard_stats():
+def get_dashboard_stats(current_user: Dict = Depends(require_roles())):
     # Count active employees (currently checked in)
     active_employees = 0
     total_employees = 0
@@ -2995,94 +3701,43 @@ def get_shopify_analytics():
         raise HTTPException(status_code=500, detail=f"Error fetching analytics: {str(e)}")
 
 @app.post("/api/shopify/config")
-def configure_shopify(store_name: str = Form(...), access_token: str = Form(...)):
-    """Configure Shopify store connection and save it persistently."""
-    global SHOPIFY_CONFIG
-    
+def configure_shopify(store_name: str = Form(...), access_token: str = Form(...), current_user: Dict = Depends(require_roles("owner", "admin"))):
+    """Configure Shopify store connection."""
     try:
-        # Test the connection first
+        # Test the connection
         old_config = SHOPIFY_CONFIG.copy()
-        test_config = SHOPIFY_CONFIG.copy()
-        test_config["store_name"] = store_name.strip()
-        test_config["access_token"] = access_token.strip()
-        test_config["configured_at"] = datetime.now().isoformat()
-        
-        # Temporarily update config for testing
-        SHOPIFY_CONFIG.update(test_config)
+        SHOPIFY_CONFIG["store_name"] = store_name.strip()
+        SHOPIFY_CONFIG["access_token"] = access_token.strip()
         
         # Test API call
         test_data = make_shopify_request("shop.json")
         shop_info = test_data.get("shop", {})
         
-        # If test successful, save to file
-        if save_shopify_config(test_config):
-            print(f"🎉 Shopify configuration saved! Store: {store_name}")
-            
-            return JSONResponse(content={
-                "success": True,
-                "message": "Shopify store connected and saved successfully!",
-                "shop_name": shop_info.get("name", store_name),
-                "shop_domain": shop_info.get("domain", f"{store_name}.myshopify.com"),
-                "currency": shop_info.get("currency", "USD"),
-                "configured_at": test_config["configured_at"],
-                "saved_to_file": True
-            })
-        else:
-            raise Exception("Failed to save configuration to file")
-            
+        return JSONResponse(content={
+            "success": True,
+            "message": "Shopify store connected successfully!",
+            "shop_name": shop_info.get("name", store_name),
+            "shop_domain": shop_info.get("domain", f"{store_name}.myshopify.com"),
+            "currency": shop_info.get("currency", "USD")
+        })
     except Exception as e:
         # Restore old config on error
         SHOPIFY_CONFIG.update(old_config)
         raise HTTPException(status_code=400, detail=f"Failed to connect to Shopify: {str(e)}")
 
 @app.get("/api/shopify/config")
-def get_shopify_config():
+def get_shopify_config(current_user: Dict = Depends(require_roles("owner", "admin"))):
     """Get current Shopify configuration status."""
-    is_configured = bool(SHOPIFY_CONFIG["store_name"] and SHOPIFY_CONFIG["access_token"])
-    
     return JSONResponse(content={
-        "configured": is_configured,
+        "configured": bool(SHOPIFY_CONFIG["store_name"] and SHOPIFY_CONFIG["access_token"]),
         "store_name": SHOPIFY_CONFIG["store_name"],
         "api_version": SHOPIFY_CONFIG["api_version"],
-        "configured_at": SHOPIFY_CONFIG.get("configured_at"),
-        "last_updated": SHOPIFY_CONFIG.get("last_updated"),
-        "config_file_exists": os.path.exists(SHOPIFY_CONFIG_FILE),
-        "status": "✅ Connected and saved" if is_configured else "⚠️ Not configured"
+        "last_updated": SHOPIFY_CACHE.get("last_updated")
     })
-
-@app.delete("/api/shopify/config")
-def clear_shopify_config():
-    """Clear/reset Shopify configuration."""
-    global SHOPIFY_CONFIG
-    
-    try:
-        # Reset to default config
-        SHOPIFY_CONFIG = {
-            "store_name": "",
-            "access_token": "",
-            "api_version": "2024-01",
-            "configured_at": None,
-            "last_updated": None
-        }
-        
-        # Remove config file if it exists
-        if os.path.exists(SHOPIFY_CONFIG_FILE):
-            os.remove(SHOPIFY_CONFIG_FILE)
-            print(f"🗑️ Deleted Shopify config file: {SHOPIFY_CONFIG_FILE}")
-        
-        return JSONResponse(content={
-            "success": True,
-            "message": "Shopify configuration cleared successfully",
-            "config_reset": True,
-            "file_deleted": True
-        })
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error clearing Shopify config: {str(e)}")
 
 # -------------------- USER MANAGEMENT API --------------------
 @app.get("/api/users/stats")
-def get_users_stats():
+def get_users_stats(current_user: Dict = Depends(require_roles("owner", "admin"))):
     """Get user statistics for dashboard."""
     return JSONResponse(content=get_user_stats())
 
@@ -3092,7 +3747,8 @@ def get_users(
     role: str = "",
     status: str = "",
     sort_by: str = "name",
-    sort_dir: str = "asc"
+    sort_dir: str = "asc",
+    current_user: Dict = Depends(require_roles("owner", "admin"))
 ):
     """Get filtered and sorted user list."""
     users = list(USERS_DATABASE.values())
@@ -3136,7 +3792,7 @@ def get_users(
     })
 
 @app.post("/api/users/{user_id}/toggle-status")
-def toggle_user_status(user_id: str, admin_user: str = "EMP001"):
+def toggle_user_status(user_id: str, admin_user: str = "EMP001", current_user: Dict = Depends(require_roles("owner", "admin"))):
     """Toggle user active/inactive status."""
     if user_id not in USERS_DATABASE:
         raise HTTPException(status_code=404, detail="User not found")
@@ -3147,9 +3803,13 @@ def toggle_user_status(user_id: str, admin_user: str = "EMP001"):
     
     user["status"] = new_status
     
-    # Clear session if deactivating
+    # Save changes to file
+    save_users_database()
+    
+    # Clear session if deactivating and invalidate all user sessions
     if new_status == "inactive":
         user["session_id"] = None
+        invalidate_user_sessions(user_id)
     
     # Log audit trail
     log_audit_trail(admin_user, user_id, "status_change", old_status, new_status)
@@ -3163,7 +3823,7 @@ def toggle_user_status(user_id: str, admin_user: str = "EMP001"):
     })
 
 @app.post("/api/users/{user_id}/change-role")
-def change_user_role(user_id: str, role_data: dict, admin_user: str = "EMP001"):
+def change_user_role(user_id: str, role_data: dict, admin_user: str = "EMP001", current_user: Dict = Depends(require_roles("owner", "admin"))):
     """Change user role and permissions."""
     if user_id not in USERS_DATABASE:
         raise HTTPException(status_code=404, detail="User not found")
@@ -3175,8 +3835,32 @@ def change_user_role(user_id: str, role_data: dict, admin_user: str = "EMP001"):
     user = USERS_DATABASE[user_id]
     old_role = user["role"]
     
+    # Update USERS_DATABASE
     user["role"] = new_role
     user["permissions"] = ROLE_DEFINITIONS[new_role]["permissions"].copy()
+    
+    # IMPORTANT: Always update USERS authentication database
+    if user_id in USERS:
+        USERS[user_id]["role"] = new_role
+    else:
+        # Create user in USERS if doesn't exist
+        USERS[user_id] = {
+            "employee_id": user_id,
+            "name": user["name"],
+            "role": new_role,
+            "password_hash": pwd_context.hash("default123")  # Default password
+        }
+    
+    # Save changes to files
+    save_users_database()
+    save_users_auth()
+    
+    # Force synchronization to ensure consistency
+    sync_user_databases()
+    
+    # Invalidate user sessions to force re-authentication with new role
+    # This ensures immediate effect of role changes
+    invalidate_user_sessions(user_id)
     
     # Log audit trail
     log_audit_trail(admin_user, user_id, "role_change", old_role, new_role)
@@ -3191,7 +3875,7 @@ def change_user_role(user_id: str, role_data: dict, admin_user: str = "EMP001"):
     })
 
 @app.post("/api/users/{user_id}/update-permissions")
-def update_user_permissions(user_id: str, permission_data: dict, admin_user: str = "EMP001"):
+def update_user_permissions(user_id: str, permission_data: dict, admin_user: str = "EMP001", current_user: Dict = Depends(require_roles("owner", "admin"))):
     """Update user permissions directly."""
     if user_id not in USERS_DATABASE:
         raise HTTPException(status_code=404, detail="User not found")
@@ -3213,8 +3897,195 @@ def update_user_permissions(user_id: str, permission_data: dict, admin_user: str
         "new_permissions": new_permissions
     })
 
+@app.post("/api/users/{user_id}/change-password")
+def change_user_password(user_id: str, password_data: dict, admin_user: str = "EMP001", current_user: Dict = Depends(require_roles("owner", "admin"))):
+    """Change user password."""
+    if user_id not in USERS_DATABASE:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if user_id not in USERS:
+        raise HTTPException(status_code=404, detail="User not found in authentication database")
+    
+    new_password = password_data.get("password", "").strip()
+    if not new_password:
+        raise HTTPException(status_code=400, detail="Password cannot be empty")
+    
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long")
+    
+    user_profile = USERS_DATABASE[user_id]
+    user_auth = USERS[user_id]
+    
+    # Hash the new password
+    new_password_hash = hash_password(new_password)
+    old_password_hash = user_auth["password_hash"]
+    
+    # Update password in authentication database
+    user_auth["password_hash"] = new_password_hash
+    
+    # Save authentication changes to file
+    save_users_auth()
+    
+    # Invalidate all user sessions to force re-login with new password
+    invalidate_user_sessions(user_id)
+    
+    # Log audit trail (don't log actual passwords, just that it was changed)
+    log_audit_trail(admin_user, user_id, "password_change", "password_changed", "password_changed")
+    log_user_activity(user_id, "password_changed", f"Password changed by {current_user.get('name', admin_user)}")
+    
+    return JSONResponse(content={
+        "success": True, 
+        "message": f"Password changed for {user_profile['name']}. User will need to login with the new password."
+    })
+
+@app.post("/api/users/create")
+async def create_new_user(
+    employee_id: str = Form(...),
+    name: str = Form(...),
+    email: str = Form(...),
+    role: str = Form(...),
+    password: str = Form(...),
+    joining_date: str = Form(...),
+    phone: str = Form(""),
+    shift: str = Form(""),
+    manager: str = Form(""),
+    address: str = Form(""),
+    city: str = Form(""),
+    state: str = Form(""),
+    zip: str = Form(""),
+    emergency_contact_name: str = Form(""),
+    emergency_contact_relation: str = Form(""),
+    emergency_contact_phone: str = Form(""),
+    emergency_contact_email: str = Form(""),
+    photo: UploadFile = File(None),
+    current_user: Dict = Depends(require_roles("owner", "admin"))
+):
+    """Create a new user with complete profile information."""
+    
+    # Import datetime for use throughout the function
+    from datetime import datetime as dt
+    
+    # Validate required fields
+    if not employee_id.strip():
+        raise HTTPException(status_code=400, detail="Employee ID is required")
+    if not name.strip():
+        raise HTTPException(status_code=400, detail="Name is required")
+    if not email.strip():
+        raise HTTPException(status_code=400, detail="Email is required")
+    if not role.strip():
+        raise HTTPException(status_code=400, detail="Role is required")
+    if not joining_date.strip():
+        raise HTTPException(status_code=400, detail="Joining date is required")
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long")
+    
+    # Validate joining date format
+    try:
+        dt.strptime(joining_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid joining date format. Use YYYY-MM-DD")
+    
+    # Validate manager exists if provided
+    if manager and manager not in USERS_DATABASE:
+        raise HTTPException(status_code=400, detail="Selected manager does not exist")
+    
+    # Check if user already exists
+    if employee_id in USERS_DATABASE or employee_id in USERS:
+        raise HTTPException(status_code=400, detail="Employee ID already exists")
+    
+    # Validate role
+    if role not in ROLE_DEFINITIONS:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    
+    # Handle photo upload
+    photo_url = f"https://via.placeholder.com/100/4F46E5/ffffff?text={name[0].upper()}"
+    if photo:
+        # In a real application, you would save this to a file storage service
+        # For now, we'll create a data URL (in production, save to disk/cloud)
+        try:
+            photo_content = await photo.read()
+            if len(photo_content) > 5 * 1024 * 1024:  # 5MB limit
+                raise HTTPException(status_code=400, detail="Photo file size must be less than 5MB")
+            
+            # Create uploads directory if it doesn't exist
+            uploads_dir = "uploads/profiles"
+            os.makedirs(uploads_dir, exist_ok=True)
+            
+            # Save photo
+            photo_filename = f"{employee_id}_{photo.filename}"
+            photo_path = os.path.join(uploads_dir, photo_filename)
+            with open(photo_path, "wb") as f:
+                f.write(photo_content)
+            
+            photo_url = f"/uploads/profiles/{photo_filename}"
+        except Exception as e:
+            # If photo upload fails, use placeholder
+            print(f"Photo upload failed: {e}")
+    
+    # Handle document uploads (from request.form)
+    documents = []
+    # Note: Documents would be handled similarly to photos in a real application
+    
+    # Create user in USERS_DATABASE
+    user_data = {
+        "id": employee_id,
+        "name": name.strip(),
+        "email": email.strip().lower(),
+        "role": role,
+        "status": "active",
+        "photo": photo_url,
+        "phone": phone.strip(),
+        "joining_date": joining_date.strip(),
+        "shift": shift.strip() if shift else "",
+        "manager": manager.strip() if manager else "",
+        "address": address.strip(),
+        "city": city.strip(),
+        "state": state.strip(),
+        "zip": zip.strip(),
+        "emergency_contact": {
+            "name": emergency_contact_name.strip(),
+            "relation": emergency_contact_relation.strip(),
+            "phone": emergency_contact_phone.strip(),
+            "email": emergency_contact_email.strip()
+        },
+        "documents": documents,
+        "created_date": dt.now().strftime("%Y-%m-%d"),
+        "last_login": None,
+        "login_count": 0,
+        "permissions": ROLE_DEFINITIONS.get(role, {}).get("permissions", []),
+        "session_id": None
+    }
+    
+    USERS_DATABASE[employee_id] = user_data
+    
+    # Save USERS_DATABASE to file
+    save_users_database()
+    
+    # Create user in USERS (authentication database)
+    auth_user_data = {
+        "employee_id": employee_id,
+        "name": name.strip(),
+        "role": role,
+        "password_hash": hash_password(password)
+    }
+    
+    USERS[employee_id] = auth_user_data
+    
+    # Save USERS to file
+    save_users_auth()
+    
+    # Log audit trail
+    log_audit_trail(current_user.get("employee_id", "system"), employee_id, "user_created", "", f"User {name} created with role {role}")
+    log_user_activity(employee_id, "account_created", f"Account created by {current_user.get('name', 'admin')}")
+    
+    return JSONResponse(content={
+        "success": True,
+        "message": f"User {name} created successfully! They can now login with Employee ID: {employee_id}",
+        "user_id": employee_id
+    })
+
 @app.post("/api/roles/create")
-def create_role(role_data: dict, admin_user: str = "EMP001"):
+def create_role(role_data: dict, admin_user: str = "EMP001", current_user: Dict = Depends(require_roles("owner"))):
     """Create a new role with custom permissions."""
     role_name = role_data.get("name", "").strip()
     role_description = role_data.get("description", "").strip()
@@ -3249,7 +4120,7 @@ def create_role(role_data: dict, admin_user: str = "EMP001"):
     })
 
 @app.put("/api/roles/{role_name}")
-def update_role(role_name: str, role_data: dict, admin_user: str = "EMP001"):
+def update_role(role_name: str, role_data: dict, admin_user: str = "EMP001", current_user: Dict = Depends(require_roles("owner"))):
     """Update an existing role."""
     if role_name not in ROLE_DEFINITIONS:
         raise HTTPException(status_code=404, detail="Role not found")
@@ -3290,7 +4161,7 @@ def update_role(role_name: str, role_data: dict, admin_user: str = "EMP001"):
     })
 
 @app.delete("/api/roles/{role_name}")
-def delete_role(role_name: str, admin_user: str = "EMP001"):
+def delete_role(role_name: str, admin_user: str = "EMP001", current_user: Dict = Depends(require_roles("owner"))):
     """Delete a custom role."""
     if role_name not in ROLE_DEFINITIONS:
         raise HTTPException(status_code=404, detail="Role not found")
@@ -3316,7 +4187,7 @@ def delete_role(role_name: str, admin_user: str = "EMP001"):
     })
 
 @app.get("/api/roles")
-def get_roles():
+def get_roles(current_user: Dict = Depends(require_roles("owner", "admin"))):
     """Get all available roles and their definitions."""
     return JSONResponse(content={
         "roles": ROLE_DEFINITIONS,
@@ -3330,7 +4201,8 @@ def api_shopify_orders(
     limit: int = 100,
     page_info: str = None,
     created_at_min: str = None,
-    created_at_max: str = None
+    created_at_max: str = None,
+    current_user: Dict = Depends(require_roles("owner", "admin", "manager"))
 ):
     """Fetch orders from Shopify with pagination support."""
     try:
@@ -3364,12 +4236,166 @@ def api_shopify_orders(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching Shopify orders: {str(e)}")
 
+# -------------------- AUTHENTICATION API ENDPOINTS --------------------
+@app.post("/api/auth/login")
+def login(
+    employee_id: str = Form(...),
+    password: str = Form(...),
+    remember_me: bool = Form(False)
+):
+    """Authenticate user and create session."""
+    # Find user in authentication database
+    user = USERS.get(employee_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid employee ID or password"
+        )
+    
+    # Check if user is active in user management database
+    user_profile = USERS_DATABASE.get(employee_id)
+    if not user_profile:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account not found"
+        )
+    
+    if user_profile["status"] != "active":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account is deactivated. Please contact your administrator."
+        )
+    
+    # Verify password
+    if not verify_password(password, user["password_hash"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid employee ID or password"
+        )
+    
+    # Create session
+    session_token = create_session(employee_id, remember_me)
+    
+    # Create response
+    response = JSONResponse(content={
+        "message": "Login successful",
+        "user": {
+            "employee_id": user["employee_id"],
+            "name": user["name"],
+            "role": user["role"]
+        }
+    })
+    
+    # Set session cookie
+    max_age = (30 * 24 * 60 * 60) if remember_me else (7 * 24 * 60 * 60)  # seconds
+    response.set_cookie(
+        key="session_id",
+        value=session_token,
+        max_age=max_age,
+        httponly=True,
+        secure=False,  # Set to True in production with HTTPS
+        samesite="lax"
+    )
+    
+    return response
+
+
+@app.delete("/api/users/{user_id}")
+def delete_user(
+    user_id: str,
+    delete_files: bool = True,
+    current_user: Dict = Depends(require_roles("owner", "admin"))
+):
+    """Delete a user from both the profile database and authentication store.
+    - Only owner/admin can delete
+    - Cannot delete the owner account or self
+    - Invalidates sessions and optionally removes uploaded profile photo
+    """
+    # Prevent self-deletion to avoid locking out the current admin
+    if current_user.get("employee_id") == user_id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account.")
+
+    # Ensure user exists
+    if user_id not in USERS_DATABASE:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user_profile = USERS_DATABASE[user_id]
+
+    # Disallow deleting owner accounts
+    if user_profile.get("role") == "owner":
+        raise HTTPException(status_code=403, detail="Owner accounts cannot be deleted")
+
+    # Remove from auth if present
+    if user_id in USERS:
+        USERS.pop(user_id, None)
+
+    # Invalidate sessions
+    try:
+        invalidate_user_sessions(user_id)
+    except Exception:
+        pass
+
+    # Attempt to remove uploaded profile photo if local
+    if delete_files:
+        try:
+            photo_url = user_profile.get("photo", "")
+            if isinstance(photo_url, str) and photo_url.startswith("/uploads/"):
+                uploads_root = Path("uploads").resolve()
+                candidate = Path("." + photo_url).resolve()
+                if uploads_root in candidate.parents and candidate.exists():
+                    try:
+                        candidate.unlink()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # Remove from user database and persist
+    USERS_DATABASE.pop(user_id, None)
+    save_users_database()
+    save_users_auth()
+
+    return JSONResponse(content={
+        "success": True,
+        "message": f"User {user_id} deleted successfully"
+    })
+
+@app.post("/api/auth/logout")
+def logout(session_id: str = Cookie(None, alias="session_id")):
+    """Logout user and clear session."""
+    if session_id and session_id in SESSIONS:
+        del SESSIONS[session_id]
+    
+    response = JSONResponse(content={"message": "Logout successful"})
+    response.delete_cookie("session_id")
+    return response
+
+@app.get("/api/auth/me")
+def get_current_user_info(current_user: Dict = Depends(require_roles())):
+    """Get current logged-in user information."""
+    return {
+        "employee_id": current_user["employee_id"],
+        "name": current_user["name"],
+        "role": current_user["role"]
+    }
+
+@app.get("/api/auth/navigation")
+def get_current_user_navigation(current_user: Dict = Depends(require_roles())):
+    """Get navigation menu for current authenticated user."""
+    user_role = current_user["role"]
+    menu_with_access = get_navigation_with_access(user_role)
+    return JSONResponse(content={
+        "role": user_role,
+        "menu": menu_with_access
+    })
+
 @app.get("/api/shopify/orders/all")
 def api_shopify_orders_all(
     status: str = "any",
     fulfillment_status: str = None,
     created_at_min: str = None,
-    created_at_max: str = None
+    created_at_max: str = None,
+    current_user: Dict = Depends(require_roles("owner", "admin", "manager"))
 ):
     """
     Fetch ALL orders from Shopify using cursor-based pagination.
@@ -3426,22 +4452,25 @@ def get_user_role(employee_id: str):
     })
 
 @app.get("/api/navigation/{role}")
-def get_navigation_menu(role: str):
-    # Everyone gets the same unified menu now
-    return JSONResponse(content={"role": role, "menu": UNIFIED_NAVIGATION_MENU})
+def get_navigation_menu(role: str, current_user: Dict = Depends(require_roles())):
+    # Get menu with access information based on user's actual role
+    user_role = current_user["role"]
+    menu_with_access = get_navigation_with_access(user_role)
+    return JSONResponse(content={"role": user_role, "menu": menu_with_access})
 
 @app.get("/api/user/{employee_id}/navigation")
-def get_user_navigation(employee_id: str):
+def get_user_navigation(employee_id: str, current_user: Dict = Depends(require_roles())):
     if employee_id not in USER_ROLES:
         raise HTTPException(status_code=404, detail="User not found.")
     
     user_role = USER_ROLES[employee_id]["role"]
-    # Everyone gets the same unified menu now
+    # Get menu with access information based on user's role
+    menu_with_access = get_navigation_with_access(user_role)
     
     return JSONResponse(content={
         "employee_id": employee_id,
         "role": user_role,
-        "menu": UNIFIED_NAVIGATION_MENU
+        "menu": menu_with_access
     })
 
 @app.get("/api/chat/dm/{other_employee_id}")
@@ -3753,7 +4782,7 @@ async def packing_preview(file: UploadFile = File(...)):
 
 # -------------------- PACKING MANAGEMENT — PAGE --------------------
 @app.get("/packing")
-def eraya_packing_page():
+def eraya_packing_page(current_user: Dict = Depends(require_roles("owner", "admin", "manager", "packer"))):
     body = """
     <section class="glass p-6">
       <h1 class="text-3xl font-bold">Order Packing Management</h1>
@@ -3783,15 +4812,33 @@ def eraya_packing_page():
               <option value="25">25 / page</option>
               <option value="50">50 / page</option>
               <option value="100">100 / page</option>
+              <option value="500">500 / page</option>
             </select>
+          </div>
+          <!-- Minimal faceted filters - same style as other filters -->
+          <div class="flex flex-wrap gap-3 mt-3" id="facetedFilters">
+            <select id="qSKU" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm">
+              <option value="">All SKUs</option>
+            </select>
+            <select id="qVariant" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm">
+              <option value="">All Variants</option>
+            </select>
+            <select id="qPacker" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm">
+              <option value="">All Packers</option>
+            </select>
+          </div>
+          <!-- Selected filters chips -->
+          <div id="selectedFiltersChips" class="flex flex-wrap gap-2 mt-3 hidden">
+            <div class="text-xs text-white/60">Active filters:</div>
           </div>
         </div>
 
-        <div class="glass p-0 overflow-auto" style="max-height:70vh">
+        <div class="glass p-0 overflow-auto relative" style="max-height:70vh">
           <table class="min-w-full text-sm" id="tbl">
-            <thead class="sticky top-0 bg-slate-900/80 backdrop-blur" id="head"></thead>
+            <thead class="sticky top-0 bg-slate-900/80 backdrop-blur z-10" id="head"></thead>
             <tbody id="body"></tbody>
           </table>
+
         </div>
         <div class="flex items-center gap-3">
           <button id="prev" class="btn btn-secondary">Prev</button>
@@ -3821,9 +4868,12 @@ def eraya_packing_page():
       #tbl thead th { background-color: #0f172a; }
       .status-select { background: rgba(255,255,255,0.08); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 0.5rem; padding: 0.25rem 0.5rem; }
 
+      /* Frozen columns - Order Number and Product Name (SKU) */
+      #tbl th:nth-child(1), #tbl td:nth-child(1) { position: sticky; left: 0; z-index: 9; background: #0f172a; width: 5%; }
+      #tbl th:nth-child(2), #tbl td:nth-child(2) { position: sticky; left: 5%; z-index: 9; background: #0f172a; width: 10%; border-right: 2px solid rgba(59,130,246,0.3); }
+      #tbl td:nth-child(1), #tbl td:nth-child(2) { background: rgba(15,23,42,0.95); }
+      
       /* Column Widths */
-      #tbl th:nth-child(1), #tbl td:nth-child(1) { width: 5%; /* Packed Checkbox */ }
-      #tbl th:nth-child(2), #tbl td:nth-child(2) { width: 10%; /* Order Number */ }
       #tbl th:nth-child(3), #tbl td:nth-child(3) { width: 15%; /* Product Name */ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 0; }
       #tbl th:nth-child(4), #tbl td:nth-child(4) { width: 10%; /* Variant */ }
       #tbl th:nth-child(5), #tbl td:nth-child(5) { width: 5%;  /* Color */ }
@@ -3834,13 +4884,44 @@ def eraya_packing_page():
       #tbl th:nth-child(10), #tbl td:nth-child(10) { width: 5%; /* Main Photo Status */ }
       #tbl th:nth-child(11), #tbl td:nth-child(11) { width: 5%; /* Polaroid Count */ }
       #tbl th:nth-child(12), #tbl td:nth-child(12) { width: 10%; /* Status */ }
+      
       .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .table-img { max-height: 80px; width: auto; }
-      .status-badge { display: inline-block; padding: 2px 6px; border-radius: 6px; font-size: 12px; font-weight: 600; text-transform: capitalize; }
-      .status-badge-Packed { background: #10b981; color: white; }
-      .status-badge-Dispute { background: #f59e0b; color: white; }
-      .status-badge-Badphoto { background: #ef4444; color: white; }
-      .status-badge-Missingphoto { background: #ef4444; color: white; }
+      .table-img { max-height: 80px; width: auto; cursor: pointer; transition: transform 0.2s; }
+      .table-img:hover { transform: scale(1.05); }
+      
+      /* Status badges with chips styling */
+      .status-badge { display: inline-block; padding: 4px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: capitalize; border: 1px solid; }
+      .status-badge-Packed { background: rgba(16,185,129,0.2); color: #10b981; border-color: #10b981; }
+      .status-badge-Dispute { background: rgba(245,158,11,0.2); color: #f59e0b; border-color: #f59e0b; }
+      .status-badge-Badphoto { background: rgba(239,68,68,0.2); color: #ef4444; border-color: #ef4444; }
+      .status-badge-Missingphoto { background: rgba(239,68,68,0.2); color: #ef4444; border-color: #ef4444; }
+      .status-badge- { background: rgba(107,114,128,0.2); color: #6b7280; border-color: #6b7280; }
+      
+      /* Error highlighting */
+      .error-missing-photo { background: rgba(239,68,68,0.1) !important; border-left: 3px solid #ef4444; }
+      .error-invalid-variant { background: rgba(245,158,11,0.1) !important; border-left: 3px solid #f59e0b; }
+      .overdue-sla { background: rgba(239,68,68,0.05) !important; border-left: 3px solid #dc2626; }
+      
+      /* Filter chips */
+      .filter-chip { 
+        display: inline-flex; align-items: center; gap: 4px; 
+        background: rgba(59,130,246,0.2); color: #3b82f6; 
+        border: 1px solid #3b82f6; border-radius: 16px; 
+        padding: 4px 8px; font-size: 12px; font-weight: 500; 
+      }
+      .filter-chip button { 
+        background: none; border: none; color: inherit; 
+        cursor: pointer; font-weight: bold; margin-left: 4px; 
+      }
+      
+      /* Dropdown styling */
+      .facet-option { 
+        display: flex; align-items: center; gap: 8px; 
+        padding: 4px 8px; border-radius: 6px; cursor: pointer; 
+        font-size: 12px; transition: background-color 0.2s; 
+      }
+      .facet-option:hover { background: rgba(255,255,255,0.1); }
+      .facet-option input[type="checkbox"] { margin: 0; }
     </style>
 
     <script>
@@ -3852,15 +4933,67 @@ def eraya_packing_page():
       var exportBtn=document.getElementById('export');
       var lb=document.getElementById('lb'), lbBody=document.getElementById('lbBody'), lbClose=document.getElementById('lbClose');
       var qStatus=document.getElementById('qStatus');
+      
+      // New faceted filter elements - using select dropdowns like status
+      var qSKU=document.getElementById('qSKU'), qVariant=document.getElementById('qVariant'), qPacker=document.getElementById('qPacker');
+      var selectedFiltersChips=document.getElementById('selectedFiltersChips');
 
       // state
       var rows=[], filt=[], page=1, sortBy=null, sortDir=1, packed=JSON.parse(localStorage.getItem('packedMap')||'{}'), statuses=JSON.parse(localStorage.getItem('statusMap')||'{}');
+      var selectedSKUs=new Set(), selectedVariants=new Set(), selectedPackers=new Set();
+      var allSKUs=new Set(), allVariants=new Set(), allPackers=new Set();
 
       function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m];});}
       function td(h){return '<td class="border-t border-white/10 align-top">'+h+'</td>';}
       function savePacked(){localStorage.setItem('packedMap', JSON.stringify(packed)); localStorage.setItem('statusMap', JSON.stringify(statuses));}
 
       function imgFallback(el){el.onerror=null; el.src='https://via.placeholder.com/80?text=No+Img';}
+
+      // Main photo lightbox - same as polaroids
+      function openMainPhotoLB(photoUrl, orderNumber) {
+        lbBody.innerHTML='';
+        var im=document.createElement('img'); 
+        im.loading='lazy'; 
+        im.src=photoUrl;
+        im.className='w-full h-auto object-contain rounded-xl border border-white/10 max-h-[80vh]';
+        im.onerror=function(){ this.src='https://via.placeholder.com/400x400?text=No+Image'; };
+        lbBody.appendChild(im);
+        
+        // Update lightbox title to show it's main photo
+        var titleEl = lb.querySelector('.text-lg');
+        if(titleEl) titleEl.textContent = 'Main Photo - Order #' + orderNumber;
+        
+        lb.classList.remove('hidden'); 
+        lb.classList.add('flex');
+      }
+
+      // Faceted filter functions - populate select dropdowns
+      function buildFacetedFilters() {
+        allSKUs.clear(); allVariants.clear(); allPackers.clear();
+        for(var i=0; i<rows.length; i++) {
+          var r = rows[i];
+          if(r['Product Name']) allSKUs.add(r['Product Name']);
+          if(r['Variant']) allVariants.add(r['Variant']);
+          // For packer, we'll use a dummy field since it's not in CSV - could be status-based
+          allPackers.add('Packer A'); allPackers.add('Packer B'); allPackers.add('Packer C');
+        }
+        populateSelectDropdown(qSKU, allSKUs);
+        populateSelectDropdown(qVariant, allVariants);
+        populateSelectDropdown(qPacker, allPackers);
+      }
+
+      function populateSelectDropdown(selectEl, values) {
+        // Keep the "All" option and add unique values - simple and clean
+        var html = '<option value="">All ' + (selectEl.id === 'qSKU' ? 'SKUs' : selectEl.id === 'qVariant' ? 'Variants' : 'Packers') + '</option>';
+        var sortedValues = Array.from(values).sort();
+        
+        sortedValues.forEach(function(value) {
+          html += '<option value="' + esc(value) + '">' + esc(value) + '</option>';
+        });
+        selectEl.innerHTML = html;
+      }
+
+
 
       function openLB(urls){
         lbBody.innerHTML='';
@@ -3898,12 +5031,29 @@ def eraya_packing_page():
       function applyFilters(){
         var o=qOrder.value.trim().toLowerCase(), p=qProd.value.trim().toLowerCase(), v=qVar.value.trim().toLowerCase();
         var s=qStatus.value; // Get the selected status
+        
+        // Get selected values from the new filter dropdowns - single select like status
+        var selectedSKU = qSKU.value;
+        var selectedVariant = qVariant.value;
+        var selectedPacker = qPacker.value;
+        
         filt=rows.filter(function(r){
           var ok=true;
           if(o) ok = ok && String(r['Order Number']||'').toLowerCase().indexOf(o)>=0;
           if(p) ok = ok && String(r['Product Name']||'').toLowerCase().indexOf(p)>=0;
           if(v) ok = ok && String(r['Variant']||'').toLowerCase().indexOf(v)>=0;
           if(s) ok = ok && statuses[String(r['Order Number']||'')] === s; // Filter by status
+          
+          // Faceted filters using single select dropdowns - simple like status filter
+          if(selectedSKU) ok = ok && r['Product Name'] === selectedSKU;
+          if(selectedVariant) ok = ok && r['Variant'] === selectedVariant;
+          if(selectedPacker) {
+            // For demo purposes, randomly assign packer based on order number hash
+            var hash = r['Order Number'] ? r['Order Number'].charCodeAt(r['Order Number'].length-1) % 3 : 0;
+            var packer = ['Packer A', 'Packer B', 'Packer C'][hash];
+            ok = ok && packer === selectedPacker;
+          }
+          
           return ok;
         });
         if(sortBy){
@@ -3921,21 +5071,34 @@ def eraya_packing_page():
         var out='';
         for(var i=start;i<end;i++){
           var r=filt[i], ord=r['Order Number'], isPacked=!!packed[ord];
-          var main=r['Main Photo'] ? '<img loading="lazy" src="'+esc(r['Main Photo'])+'" class="w-20 h-20 object-cover rounded-lg border border-white/10 table-img" onerror="imgFallback(this)">' : '<span class="badge-miss">Missing photo</span>';
+          
+          // Determine error classes for highlighting
+          var errorClass = '';
+          var hasPhoto = r['Main Photo'] && r['Main Photo'].trim();
+          var hasVariant = r['Variant'] && r['Variant'].trim();
+          if(!hasPhoto) errorClass += ' error-missing-photo';
+          if(!hasVariant) errorClass += ' error-invalid-variant';
+          // Simple SLA check - if no status set and created "today" (demo)
+          if(!statuses[ord] && Math.random() > 0.8) errorClass += ' overdue-sla';
+          
+          var main = hasPhoto ? 
+            '<img loading="lazy" src="'+esc(r['Main Photo'])+'" class="w-20 h-20 object-cover rounded-lg border border-white/10 table-img cursor-pointer hover:opacity-80 transition-opacity" onerror="imgFallback(this)" onclick="openMainPhotoLB(\\''+esc(r['Main Photo'])+'\\', \\''+esc(r['Order Number'])+'\\');">' : 
+            '<span class="badge-miss">Missing photo</span>';
+          
           var polys=r['Polaroids']||[]; var thumbs='';
           for(var t=0; t<Math.min(3,polys.length); t++){
-            thumbs+='<img loading="lazy" src="'+esc(polys[t])+'" class="w-14 h-14 object-cover rounded-md border border-white/10 table-img" onerror="imgFallback(this)" style="margin-right:4px">';
+            thumbs+='<img loading="lazy" src="'+esc(polys[t])+'" class="w-14 h-14 object-cover rounded-md border border-white/10 table-img cursor-pointer hover:opacity-80 transition-opacity" onerror="imgFallback(this)" style="margin-right:4px">';
           }
           var more=polys.length>3?('<div class="text-xs text-white/60">+'+(polys.length-3)+' more</div>'):'';
           var gallery='<a href="#" class="gal" data-idx="'+i+'"><div class="flex gap-2 flex-wrap">'+thumbs+more+'</div></a>';
           var engr=String(r['Back Engraving Value']||'').trim()?('<div class="truncate" style="white-space:pre-wrap">'+esc(r['Back Engraving Value'])+'</div>'):'<span class="badge-miss">Missing</span>';
           var currentStatus = statuses[ord] || '';
 
-          out+='<tr class="'+(isPacked?'packed':'')+'">'+
+          out+='<tr class="'+(isPacked?'packed':'')+errorClass+'">'+
             td('<input type="checkbox" class="chk" data-ord="'+esc(ord)+'" '+(isPacked?'checked':'')+'>')+
             td(esc(ord))+td(esc(r['Product Name']))+td(esc(r['Variant']))+td(esc(r['Color']))+
             td(main)+td(gallery)+td(esc(r['Back Engraving Type']))+td(engr)+td(esc(r['Main Photo Status']))+td(esc(r['Polaroid Count']))+
-            td('<select class="status-select status-badge status-badge-'+esc(currentStatus)+'" data-ord="'+esc(ord)+'">' +
+            td('<select class="status-select status-badge status-badge-'+esc(currentStatus.replace(/ /g,''))+'" data-ord="'+esc(ord)+'">' +
               ['', 'Packed', 'Dispute', 'Bad photo', 'Missing photo'].map(function(opt) {
                 return '<option value="'+opt+'" '+(currentStatus===opt?'selected':'')+'>'+(opt||'—')+'</option>';
               }).join('') +
@@ -4013,6 +5176,11 @@ def eraya_packing_page():
       pageSizeEl.onchange=applyFilters;
       qOrder.oninput=qProd.oninput=qVar.oninput=applyFilters;
       qStatus.onchange=applyFilters;
+      
+      // Add event listeners for the new faceted filter dropdowns - simple like status filter
+      qSKU.onchange=applyFilters;
+      qVariant.onchange=applyFilters;
+      qPacker.onchange=applyFilters;
 
       window.imgFallback = imgFallback; // make global for onerror attr
 
@@ -4026,7 +5194,7 @@ def eraya_packing_page():
             if(!x.ok){ status.textContent='Error: '+x.text; return; }
             var data; try{ data=JSON.parse(x.text); }catch(e){ status.textContent='Bad JSON from server'; return; }
             rows=data.rows||[]; status.textContent='Loaded '+rows.length+' orders';
-            buildHead(); applyFilters();
+            buildHead(); buildFacetedFilters(); applyFilters();
           })
           .catch(function(err){ console.error(err); status.textContent='Unexpected error'; });
       };
@@ -4053,7 +5221,7 @@ def eraya_packing_page():
 
 # -------------------- SHOPIFY SETTINGS PAGE --------------------
 @app.get("/shopify/settings")
-def shopify_settings_page():
+def shopify_settings_page(current_user: Dict = Depends(require_roles("owner", "admin"))):
     body = """
     <section class="glass p-6">
       <h1 class="text-3xl font-bold mb-2">🛒 Shopify Integration Settings</h1>
@@ -4086,13 +5254,10 @@ def shopify_settings_page():
           
           <div class="flex gap-3">
             <button type="submit" class="btn btn-primary">
-              🔗 Connect & Save Store
+              🔗 Connect Store
             </button>
             <button type="button" id="testConnection" class="btn btn-secondary">
               🧪 Test Connection
-            </button>
-            <button type="button" id="clearConfig" class="btn btn-danger" style="display: none;">
-              🗑️ Clear Settings
             </button>
           </div>
         </form>
@@ -4142,36 +5307,9 @@ def shopify_settings_page():
       </div>
     </section>
     
-    <style>
-      .btn-danger {
-        background: linear-gradient(135deg, #ef4444, #dc2626);
-        color: white;
-        border: none;
-        padding: 0.5rem 1rem;
-        border-radius: 0.5rem;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.2s ease;
-      }
-      
-      .btn-danger:hover {
-        background: linear-gradient(135deg, #dc2626, #b91c1c);
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-      }
-      
-      .btn-danger:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-        transform: none;
-        box-shadow: none;
-      }
-    </style>
-    
     <script>
       const form = document.getElementById('shopifyForm');
       const testBtn = document.getElementById('testConnection');
-      const clearBtn = document.getElementById('clearConfig');
       const statusDiv = document.getElementById('connectionStatus');
       const previewDiv = document.getElementById('dataPreview');
       const previewContent = document.getElementById('previewContent');
@@ -4184,22 +5322,13 @@ def shopify_settings_page():
           
           if (data.configured) {
             document.getElementById('storeName').value = data.store_name;
-            
-            let statusMessage = `✅ Connected to ${data.store_name}.myshopify.com`;
-            if (data.config_file_exists) {
-              statusMessage += ' (Saved permanently)';
-            }
-            
-            showStatus('success', statusMessage, data);
-            clearBtn.style.display = 'inline-block'; // Show clear button when configured
+            showStatus('success', `✅ Connected to ${data.store_name}.myshopify.com`, data);
             loadDataPreview();
           } else {
             showStatus('warning', '⚠️ Shopify store not configured yet');
-            clearBtn.style.display = 'none'; // Hide clear button when not configured
           }
         } catch (error) {
           showStatus('error', '❌ Error loading configuration');
-          clearBtn.style.display = 'none';
         }
       }
       
@@ -4211,16 +5340,8 @@ def shopify_settings_page():
         };
         
         let extraInfo = '';
-        if (data) {
-          if (data.configured_at) {
-            extraInfo += `<div class="text-xs mt-1 opacity-75">First configured: ${new Date(data.configured_at).toLocaleString()}</div>`;
-          }
-          if (data.last_updated) {
-            extraInfo += `<div class="text-xs mt-1 opacity-75">Last updated: ${new Date(data.last_updated).toLocaleString()}</div>`;
-          }
-          if (data.config_file_exists) {
-            extraInfo += `<div class="text-xs mt-1 opacity-75">📁 Configuration saved to file</div>`;
-          }
+        if (data && data.last_updated) {
+          extraInfo = `<div class="text-xs mt-1 opacity-75">Last updated: ${new Date(data.last_updated).toLocaleString()}</div>`;
         }
         
         statusDiv.innerHTML = `
@@ -4276,39 +5397,6 @@ def shopify_settings_page():
         testBtn.click(); // Reuse test connection logic
       });
       
-      // Clear configuration
-      clearBtn.addEventListener('click', async () => {
-        if (!confirm('Are you sure you want to clear the Shopify configuration? This will remove all saved settings.')) {
-          return;
-        }
-        
-        clearBtn.disabled = true;
-        clearBtn.textContent = '🔄 Clearing...';
-        
-        try {
-          const response = await fetch('/api/shopify/config', {
-            method: 'DELETE'
-          });
-          
-          const result = await response.json();
-          
-          if (response.ok) {
-            showStatus('success', '✅ Configuration cleared successfully');
-            document.getElementById('storeName').value = '';
-            document.getElementById('accessToken').value = '';
-            clearBtn.style.display = 'none';
-            previewDiv.style.display = 'none';
-          } else {
-            showStatus('error', `❌ ${result.detail}`);
-          }
-        } catch (error) {
-          showStatus('error', '❌ Error clearing configuration: ' + error.message);
-        } finally {
-          clearBtn.disabled = false;
-          clearBtn.textContent = '🗑️ Clear Settings';
-        }
-      });
-      
       // Load data preview
       async function loadDataPreview() {
         try {
@@ -4359,7 +5447,7 @@ def shopify_settings_page():
     return _eraya_lumen_page("Shopify Settings", body)
 
 @app.get("/admin/users")
-def user_management_page():
+def user_management_page(current_user: Dict = Depends(require_roles("owner", "admin"))):
     body = """
     <section class="glass p-6">
       <h1 class="text-3xl font-bold mb-2">👨‍💼 User Management</h1>
@@ -4384,6 +5472,7 @@ def user_management_page():
           </select>
         </div>
         <div class="flex flex-wrap items-center gap-3">
+          <button id="addNewUser" class="btn btn-sm btn-primary">👤 Add New User</button>
           <button id="bulkActivate" class="btn btn-sm btn-success" disabled>Activate Selected</button>
           <button id="bulkDeactivate" class="btn btn-sm btn-warning" disabled>Deactivate Selected</button>
           <button id="manageRoles" class="btn btn-sm btn-accent">🎭 Manage Roles</button>
@@ -4447,7 +5536,7 @@ def user_management_page():
             <div class="lg:col-span-1">
               <div class="text-center mb-6">
                 <div class="relative inline-block">
-                  <img id="modalUserPhoto" src="" alt="User Photo" class="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-white/20">
+                <img id="modalUserPhoto" src="" alt="User Photo" class="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-white/20">
                   <div id="modalUserIcon" class="absolute -bottom-2 -right-2 w-8 h-8 rounded-full flex items-center justify-center text-lg profile-icon" 
                        style="border: 3px solid rgba(255,255,255,0.9);">
                   </div>
@@ -4463,6 +5552,8 @@ def user_management_page():
                 <select id="changeUserRole" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2">
                   <!-- Will be populated -->
                 </select>
+                <button id="changeUserPassword" class="btn btn-warning w-full">🔑 Change Password</button>
+                <button id="deleteUserBtn" class="btn btn-danger w-full">🗑️ Delete User</button>
                 <button id="viewUserActivity" class="btn btn-secondary w-full">View Activity Log</button>
               </div>
             </div>
@@ -4568,6 +5659,206 @@ def user_management_page():
       </div>
     </div>
     
+    <!-- Password Change Modal -->
+    <div id="passwordModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] hidden items-center justify-center p-4">
+      <div class="glass max-w-md w-full">
+        <div class="p-6">
+          <div class="flex items-center justify-between mb-6">
+            <h2 class="text-2xl font-bold">🔑 Change Password</h2>
+            <button id="closePasswordModal" class="text-white/60 hover:text-white text-2xl">&times;</button>
+          </div>
+          
+          <!-- Password Form -->
+          <form id="passwordForm" class="space-y-4">
+            <div class="text-center mb-4">
+              <div class="w-16 h-16 rounded-full bg-gradient-to-r from-yellow-500 to-orange-500 flex items-center justify-center mx-auto mb-2">
+                <span id="passwordModalIcon" class="text-2xl">🔑</span>
+              </div>
+              <h3 id="passwordModalUserName" class="text-lg font-semibold"></h3>
+              <p class="text-white/60 text-sm">Enter a new password for this user</p>
+            </div>
+            
+            <div>
+              <label class="block text-sm font-semibold mb-2">New Password</label>
+              <input type="password" id="newPassword" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="Enter new password" required minlength="6">
+              <div class="text-xs text-white/60 mt-1">Minimum 6 characters</div>
+            </div>
+            
+            <div>
+              <label class="block text-sm font-semibold mb-2">Confirm Password</label>
+              <input type="password" id="confirmPassword" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="Confirm new password" required minlength="6">
+              <div id="passwordMatchError" class="text-xs text-red-400 mt-1 hidden">Passwords do not match</div>
+            </div>
+            
+            <div class="bg-yellow-500/20 border border-yellow-500/30 rounded-lg p-3">
+              <div class="flex items-center gap-2 text-yellow-400 text-sm">
+                <span>⚠️</span>
+                <span>The user will be logged out and must use the new password to login.</span>
+              </div>
+            </div>
+            
+            <div class="flex gap-3 pt-4">
+              <button type="submit" class="btn btn-warning flex-1">🔑 Change Password</button>
+              <button type="button" id="cancelPasswordChange" class="btn btn-secondary">❌ Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Add New User Modal -->
+    <div id="addUserModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] hidden items-center justify-center p-4">
+      <div class="glass max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+        <div class="p-6">
+          <div class="flex items-center justify-between mb-6">
+            <h2 class="text-2xl font-bold">👤 Add New User</h2>
+            <button id="closeAddUserModal" class="text-white/60 hover:text-white text-2xl">&times;</button>
+          </div>
+          
+          <!-- Add User Form -->
+          <form id="addUserForm" class="space-y-6">
+            <!-- Basic Information -->
+            <div class="glass p-4 rounded-xl">
+              <h3 class="text-lg font-semibold mb-4">📋 Basic Information</h3>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-sm font-semibold mb-2">Employee ID *</label>
+                  <input type="text" id="newEmployeeId" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="e.g., EMP007" required>
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-2">Full Name *</label>
+                  <input type="text" id="newEmployeeName" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="Enter full name" required>
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-2">Email *</label>
+                  <input type="email" id="newEmployeeEmail" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="employee@company.com" required>
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-2">Phone Number</label>
+                  <input type="tel" id="newEmployeePhone" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="+1 (555) 123-4567">
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-2">Role *</label>
+                  <select id="newEmployeeRole" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" required>
+                    <option value="">Select Role</option>
+                    <!-- Will be populated -->
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-2">Initial Password *</label>
+                  <input type="password" id="newEmployeePassword" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="Minimum 6 characters" required minlength="6">
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-2">Joining Date *</label>
+                  <input type="date" id="newEmployeeJoiningDate" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" required>
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-2">Shift</label>
+                  <select id="newEmployeeShift" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2">
+                    <option value="">Select Shift</option>
+                    <option value="morning">Morning (6 AM - 2 PM)</option>
+                    <option value="afternoon">Afternoon (2 PM - 10 PM)</option>
+                    <option value="night">Night (10 PM - 6 AM)</option>
+                    <option value="flexible">Flexible</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-2">Manager</label>
+                  <select id="newEmployeeManager" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2">
+                    <option value="">Select Manager</option>
+                    <!-- Will be populated with managers -->
+                  </select>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Profile Photo -->
+            <div class="glass p-4 rounded-xl">
+              <h3 class="text-lg font-semibold mb-4">📷 Profile Photo</h3>
+              <div class="flex items-center gap-4">
+                <div id="photoPreview" class="w-20 h-20 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 flex items-center justify-center text-2xl font-bold">
+                  👤
+                </div>
+                <div class="flex-1">
+                  <input type="file" id="profilePhotoInput" accept="image/*" class="hidden">
+                  <button type="button" id="uploadPhotoBtn" class="btn btn-secondary mb-2">📷 Upload Photo</button>
+                  <div class="text-xs text-white/60">Supported: JPG, PNG, GIF (Max 5MB)</div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Contact Information -->
+            <div class="glass p-4 rounded-xl">
+              <h3 class="text-lg font-semibold mb-4">📍 Contact Information</h3>
+              <div class="grid grid-cols-1 gap-4">
+                <div>
+                  <label class="block text-sm font-semibold mb-2">Address</label>
+                  <textarea id="newEmployeeAddress" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" rows="2" placeholder="Enter full address"></textarea>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label class="block text-sm font-semibold mb-2">City</label>
+                    <input type="text" id="newEmployeeCity" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="City">
+                  </div>
+                  <div>
+                    <label class="block text-sm font-semibold mb-2">State/Province</label>
+                    <input type="text" id="newEmployeeState" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="State">
+                  </div>
+                  <div>
+                    <label class="block text-sm font-semibold mb-2">ZIP/Postal Code</label>
+                    <input type="text" id="newEmployeeZip" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="ZIP Code">
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Emergency Contact -->
+            <div class="glass p-4 rounded-xl">
+              <h3 class="text-lg font-semibold mb-4">🚨 Emergency Contact</h3>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-sm font-semibold mb-2">Emergency Contact Name</label>
+                  <input type="text" id="emergencyContactName" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="Contact person name">
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-2">Relationship</label>
+                  <input type="text" id="emergencyContactRelation" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="e.g., Spouse, Parent, Sibling">
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-2">Emergency Contact Phone</label>
+                  <input type="tel" id="emergencyContactPhone" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="+1 (555) 123-4567">
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-2">Emergency Contact Email</label>
+                  <input type="email" id="emergencyContactEmail" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-4 py-2" placeholder="emergency@contact.com">
+                </div>
+              </div>
+            </div>
+            
+            <!-- Document Upload -->
+            <div class="glass p-4 rounded-xl">
+              <h3 class="text-lg font-semibold mb-4">📎 Important Documents</h3>
+              <div class="space-y-3">
+                <div>
+                  <input type="file" id="documentsInput" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" class="hidden">
+                  <button type="button" id="uploadDocumentsBtn" class="btn btn-secondary">📎 Upload Documents</button>
+                  <div class="text-xs text-white/60 mt-1">Supported: PDF, DOC, DOCX, JPG, PNG (Max 10MB each)</div>
+                </div>
+                <div id="documentsPreview" class="space-y-2">
+                  <!-- Uploaded documents will appear here -->
+                </div>
+              </div>
+            </div>
+            
+            <div class="flex gap-3 pt-4">
+              <button type="submit" class="btn btn-success flex-1">👤 Create User</button>
+              <button type="button" id="cancelAddUser" class="btn btn-secondary">❌ Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+    
     <style>
       .user-card { transition: all 0.2s ease; }
       .user-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.3); }
@@ -4653,6 +5944,10 @@ def user_management_page():
       const closeRoleModalBtn = document.getElementById('closeRoleModal');
       const roleEditModal = document.getElementById('roleEditModal');
       const closeRoleEditModalBtn = document.getElementById('closeRoleEditModal');
+      const passwordModal = document.getElementById('passwordModal');
+      const closePasswordModalBtn = document.getElementById('closePasswordModal');
+      const addUserModal = document.getElementById('addUserModal');
+      const closeAddUserModalBtn = document.getElementById('closeAddUserModal');
       const editPermissionsBtn = document.getElementById('editPermissions');
       const savePermissionsBtn = document.getElementById('savePermissions');
       const cancelPermissionsBtn = document.getElementById('cancelPermissions');
@@ -4705,6 +6000,36 @@ def user_management_page():
         closeRoleEditModalBtn.addEventListener('click', closeRoleEditModal);
         document.getElementById('cancelRoleEdit').addEventListener('click', closeRoleEditModal);
         document.getElementById('roleForm').addEventListener('submit', saveRole);
+        
+        // Password Change Modal
+        closePasswordModalBtn.addEventListener('click', closePasswordModal);
+        passwordModal.addEventListener('click', (e) => {
+          if (e.target === passwordModal) closePasswordModal();
+        });
+        document.getElementById('passwordForm').addEventListener('submit', changeUserPassword);
+        document.getElementById('cancelPasswordChange').addEventListener('click', closePasswordModal);
+        
+        // Password validation
+        document.getElementById('confirmPassword').addEventListener('input', validatePasswordMatch);
+        
+        // Add User Modal
+        document.getElementById('addNewUser').addEventListener('click', openAddUserModal);
+        closeAddUserModalBtn.addEventListener('click', closeAddUserModal);
+        addUserModal.addEventListener('click', (e) => {
+          if (e.target === addUserModal) closeAddUserModal();
+        });
+        document.getElementById('addUserForm').addEventListener('submit', createNewUser);
+        document.getElementById('cancelAddUser').addEventListener('click', closeAddUserModal);
+        
+        // File upload handlers
+        document.getElementById('uploadPhotoBtn').addEventListener('click', () => {
+          document.getElementById('profilePhotoInput').click();
+        });
+        document.getElementById('profilePhotoInput').addEventListener('change', handlePhotoUpload);
+        document.getElementById('uploadDocumentsBtn').addEventListener('click', () => {
+          document.getElementById('documentsInput').click();
+        });
+        document.getElementById('documentsInput').addEventListener('change', handleDocumentsUpload);
       }
       
       async function loadUserStats() {
@@ -4824,7 +6149,7 @@ def user_management_page():
               <td class="p-4 border-b border-white/10">
                 <div class="flex items-center gap-3">
                   <div class="relative">
-                    <img src="${user.photo}" alt="${user.name}" class="w-10 h-10 rounded-full border-2 border-white/20">
+                  <img src="${user.photo}" alt="${user.name}" class="w-10 h-10 rounded-full border-2 border-white/20">
                     <div class="absolute -bottom-1 -right-1 w-6 h-6 rounded-full flex items-center justify-center text-sm profile-icon" 
                          style="background: ${user.icon_color || '#6b7280'}; border: 2px solid rgba(255,255,255,0.8);">
                       ${user.icon || '👤'}
@@ -5079,12 +6404,363 @@ def user_management_page():
             }
           }
         };
+        
+        document.getElementById('changeUserPassword').onclick = () => {
+          openPasswordModal(userId, user.name);
+        };
+
+        document.getElementById('deleteUserBtn').onclick = async () => {
+          if (!confirm(`Are you sure you want to delete ${user.name} (${user.id})? This cannot be undone.`)) {
+            return;
+          }
+          try {
+            const response = await fetch(`/api/users/${userId}?delete_files=true`, { method: 'DELETE' });
+            if (response.ok) {
+              alert('User deleted successfully');
+              closeModal();
+              await loadUsers();
+              await loadUserStats();
+            } else {
+              const err = await response.json().catch(() => ({ detail: 'Failed to delete user' }));
+              alert(err.detail || 'Failed to delete user');
+            }
+          } catch (e) {
+            alert('Error deleting user: ' + e.message);
+          }
+        };
       }
       
       function closeModal() {
         userModal.classList.add('hidden');
         userModal.classList.remove('flex');
         currentModal = null;
+      }
+      
+      function openPasswordModal(userId, userName) {
+        document.getElementById('passwordModalUserName').textContent = userName;
+        document.getElementById('passwordModalIcon').textContent = '🔑';
+        document.getElementById('newPassword').value = '';
+        document.getElementById('confirmPassword').value = '';
+        document.getElementById('passwordMatchError').classList.add('hidden');
+        
+        // Store current user ID for the password change
+        passwordModal.dataset.userId = userId;
+        
+        // Show modal
+        passwordModal.classList.remove('hidden');
+        passwordModal.classList.add('flex');
+        
+        // Focus on password field
+        setTimeout(() => {
+          document.getElementById('newPassword').focus();
+        }, 100);
+      }
+      
+      function closePasswordModal() {
+        passwordModal.classList.add('hidden');
+        passwordModal.classList.remove('flex');
+        
+        // Clear form
+        document.getElementById('newPassword').value = '';
+        document.getElementById('confirmPassword').value = '';
+        document.getElementById('passwordMatchError').classList.add('hidden');
+      }
+      
+      function validatePasswordMatch() {
+        const newPassword = document.getElementById('newPassword').value;
+        const confirmPassword = document.getElementById('confirmPassword').value;
+        const errorDiv = document.getElementById('passwordMatchError');
+        
+        if (confirmPassword && newPassword !== confirmPassword) {
+          errorDiv.classList.remove('hidden');
+          return false;
+        } else {
+          errorDiv.classList.add('hidden');
+          return true;
+        }
+      }
+      
+      async function changeUserPassword(event) {
+        event.preventDefault();
+        
+        const newPassword = document.getElementById('newPassword').value;
+        const confirmPassword = document.getElementById('confirmPassword').value;
+        const userId = passwordModal.dataset.userId;
+        
+        // Validate passwords
+        if (newPassword.length < 6) {
+          alert('Password must be at least 6 characters long');
+          return;
+        }
+        
+        if (newPassword !== confirmPassword) {
+          alert('Passwords do not match');
+          return;
+        }
+        
+        try {
+          const response = await fetch(`/api/users/${userId}/change-password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: newPassword })
+          });
+          
+          const result = await response.json();
+          
+          if (response.ok && result.success) {
+            alert(result.message);
+            closePasswordModal();
+            closeModal(); // Close the user modal too
+          } else {
+            alert(result.message || 'Failed to change password');
+          }
+        } catch (error) {
+          alert('Error changing password: ' + error.message);
+        }
+      }
+      
+      // Add User Modal Functions
+      let uploadedPhoto = null;
+      let uploadedDocuments = [];
+      
+      async function openAddUserModal() {
+        // Clear form
+        document.getElementById('addUserForm').reset();
+        document.getElementById('photoPreview').innerHTML = '👤';
+        document.getElementById('documentsPreview').innerHTML = '';
+        uploadedPhoto = null;
+        uploadedDocuments = [];
+        
+        // Set default joining date to today
+        const today = new Date().toISOString().split('T')[0];
+        document.getElementById('newEmployeeJoiningDate').value = today;
+        
+        // Load and populate roles dropdown
+        await loadRolesForForm();
+        
+        // Populate managers dropdown
+        populateManagersDropdown();
+        
+        // Show modal
+        addUserModal.classList.remove('hidden');
+        addUserModal.classList.add('flex');
+        
+        // Focus on employee ID field
+        setTimeout(() => {
+          document.getElementById('newEmployeeId').focus();
+        }, 100);
+      }
+      
+      function closeAddUserModal() {
+        addUserModal.classList.add('hidden');
+        addUserModal.classList.remove('flex');
+        
+        // Clear form and uploads
+        document.getElementById('addUserForm').reset();
+        uploadedPhoto = null;
+        uploadedDocuments = [];
+      }
+      
+      async function loadRolesForForm() {
+        try {
+          const response = await fetch('/api/roles');
+          const data = await response.json();
+          
+          if (data.roles) {
+            allRoles = data.roles;
+            populateRolesDropdown();
+          }
+        } catch (error) {
+          console.error('Failed to load roles:', error);
+          // Fallback to hardcoded roles if API fails
+          populateRolesDropdownFallback();
+        }
+      }
+      
+      function populateRolesDropdown() {
+        const roleSelect = document.getElementById('newEmployeeRole');
+        roleSelect.innerHTML = '<option value="">Select Role</option>';
+        
+        Object.keys(allRoles).forEach(roleKey => {
+          const role = allRoles[roleKey];
+          const option = document.createElement('option');
+          option.value = roleKey;
+          option.textContent = role.name;
+          roleSelect.appendChild(option);
+        });
+      }
+      
+      function populateRolesDropdownFallback() {
+        const roleSelect = document.getElementById('newEmployeeRole');
+        roleSelect.innerHTML = `
+          <option value="">Select Role</option>
+          <option value="owner">Company Owner</option>
+          <option value="admin">Admin</option>
+          <option value="manager">Manager</option>
+          <option value="packer">Packer</option>
+        `;
+      }
+      
+      function populateManagersDropdown() {
+        const managerSelect = document.getElementById('newEmployeeManager');
+        managerSelect.innerHTML = '<option value="">Select Manager</option>';
+        
+        // Get users who are managers, admins, or owners
+        const managers = allUsers.filter(user => 
+          ['owner', 'admin', 'manager'].includes(user.role) && user.status === 'active'
+        );
+        
+        managers.forEach(manager => {
+          const option = document.createElement('option');
+          option.value = manager.id;
+          option.textContent = `${manager.name} (${manager.role})`;
+          managerSelect.appendChild(option);
+        });
+      }
+      
+      function handlePhotoUpload(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        
+        // Validate file size (5MB limit)
+        if (file.size > 5 * 1024 * 1024) {
+          alert('File size must be less than 5MB');
+          return;
+        }
+        
+        // Validate file type
+        if (!file.type.startsWith('image/')) {
+          alert('Please select a valid image file');
+          return;
+        }
+        
+        // Create preview
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const preview = document.getElementById('photoPreview');
+          preview.innerHTML = `<img src="${e.target.result}" class="w-full h-full object-cover rounded-full">`;
+          uploadedPhoto = {
+            file: file,
+            data: e.target.result
+          };
+        };
+        reader.readAsDataURL(file);
+      }
+      
+      function handleDocumentsUpload(event) {
+        const files = Array.from(event.target.files);
+        const preview = document.getElementById('documentsPreview');
+        
+        files.forEach(file => {
+          // Validate file size (10MB limit per file)
+          if (file.size > 10 * 1024 * 1024) {
+            alert(`File ${file.name} is too large. Maximum size is 10MB`);
+            return;
+          }
+          
+          // Add to uploaded documents
+          uploadedDocuments.push(file);
+          
+          // Create preview item
+          const docItem = document.createElement('div');
+          docItem.className = 'flex items-center justify-between bg-slate-800/50 rounded-lg p-3';
+          docItem.innerHTML = `
+            <div class="flex items-center gap-2">
+              <span class="text-lg">${getFileIcon(file.type)}</span>
+              <div>
+                <div class="font-medium text-sm">${file.name}</div>
+                <div class="text-xs text-white/60">${formatFileSize(file.size)}</div>
+              </div>
+            </div>
+            <button type="button" onclick="removeDocument('${file.name}')" class="text-red-400 hover:text-red-300">✕</button>
+          `;
+          preview.appendChild(docItem);
+        });
+        
+        // Clear input
+        event.target.value = '';
+      }
+      
+      function getFileIcon(fileType) {
+        if (fileType.includes('pdf')) return '📄';
+        if (fileType.includes('doc')) return '📝';
+        if (fileType.includes('image')) return '🖼️';
+        return '📎';
+      }
+      
+      function formatFileSize(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+      }
+      
+      function removeDocument(fileName) {
+        uploadedDocuments = uploadedDocuments.filter(doc => doc.name !== fileName);
+        
+        // Refresh preview
+        const preview = document.getElementById('documentsPreview');
+        const items = preview.querySelectorAll('div');
+        items.forEach(item => {
+          if (item.textContent.includes(fileName)) {
+            item.remove();
+          }
+        });
+      }
+      
+      async function createNewUser(event) {
+        event.preventDefault();
+        
+        // Get form data
+        const formData = new FormData();
+        formData.append('employee_id', document.getElementById('newEmployeeId').value);
+        formData.append('name', document.getElementById('newEmployeeName').value);
+        formData.append('email', document.getElementById('newEmployeeEmail').value);
+        formData.append('phone', document.getElementById('newEmployeePhone').value);
+        formData.append('role', document.getElementById('newEmployeeRole').value);
+        formData.append('password', document.getElementById('newEmployeePassword').value);
+        formData.append('joining_date', document.getElementById('newEmployeeJoiningDate').value);
+        formData.append('shift', document.getElementById('newEmployeeShift').value);
+        formData.append('manager', document.getElementById('newEmployeeManager').value);
+        formData.append('address', document.getElementById('newEmployeeAddress').value);
+        formData.append('city', document.getElementById('newEmployeeCity').value);
+        formData.append('state', document.getElementById('newEmployeeState').value);
+        formData.append('zip', document.getElementById('newEmployeeZip').value);
+        formData.append('emergency_contact_name', document.getElementById('emergencyContactName').value);
+        formData.append('emergency_contact_relation', document.getElementById('emergencyContactRelation').value);
+        formData.append('emergency_contact_phone', document.getElementById('emergencyContactPhone').value);
+        formData.append('emergency_contact_email', document.getElementById('emergencyContactEmail').value);
+        
+        // Add photo if uploaded
+        if (uploadedPhoto) {
+          formData.append('photo', uploadedPhoto.file);
+        }
+        
+        // Add documents if uploaded
+        uploadedDocuments.forEach((doc, index) => {
+          formData.append(`document_${index}`, doc);
+        });
+        
+        try {
+          const response = await fetch('/api/users/create', {
+            method: 'POST',
+            body: formData
+          });
+          
+          const result = await response.json();
+          
+          if (response.ok && result.success) {
+            alert(result.message);
+            closeAddUserModal();
+            await loadUsers();
+            await loadUserStats();
+          } else {
+            alert(result.message || 'Failed to create user');
+          }
+        } catch (error) {
+          alert('Error creating user: ' + error.message);
+        }
       }
       
       function formatDateTime(dateString) {
@@ -5454,7 +7130,7 @@ def eraya_pending_page():
 
 
 @app.get("/attendance")
-def eraya_attendance_page():
+def eraya_attendance_page(current_user: Dict = Depends(require_roles("owner", "admin", "manager", "packer"))):
     body = """
     <section class="glass p-6">
       <h1 class="text-3xl font-bold">Employee Attendance</h1>

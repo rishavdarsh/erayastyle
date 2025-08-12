@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title or 'Tasks' }}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+  <link rel="icon" href="/favicon.ico">
+  <style>
+    .kanban-col { min-height: 200px; }
+    /* Match site's glass look */
+    .glass {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.08);
+      backdrop-filter: blur(8px);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+    .chip {
+      background: rgba(59,130,246,0.18);
+      border: 1px solid rgba(59,130,246,0.35);
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-white min-h-screen">
+  <header class="p-4 border-b border-white/10 flex items-center justify-between">
+    <h1 class="text-xl font-semibold">{{ header or 'Employee Task Dashboard' }}</h1>
+    <nav class="space-x-4 text-sm">
+      <a href="/dashboard" class="hover:underline">My Dashboard</a>
+      <a href="/team" class="hover:underline">Team</a>
+      <a href="/admin/tasks" class="hover:underline">Admin</a>
+    </nav>
+  </header>
+  <main class="p-4">
+    {% block content %}{% endblock %}
+  </main>
+  <script src="/static/js/tasks.js"></script>
+</body>
+</html>
+
+
