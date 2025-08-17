@@ -1,81 +1,280 @@
 {% extends "layout_base.html" %}
 {% block content %}
-<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-  <div class="p-4 glass rounded-xl">Due Today: {{ counts.due_today }}</div>
-  <div class="p-4 glass rounded-xl">In Progress: {{ counts.in_progress }}</div>
-  <div class="p-4 glass rounded-xl">In Review: {{ counts.review }}</div>
-  <div class="p-4 glass rounded-xl">Overdue: {{ counts.overdue }}</div>
-</div>
 
-<h2 class="text-lg font-semibold mb-2">Daily Tasks</h2>
-<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8" id="board-daily" data-board="DAILY">
-  <div class="p-3 glass rounded-xl">
-    <h3 class="font-semibold mb-2">TODO</h3>
-    <div class="kanban-col space-y-2" data-status="TODO">
-      {% for t in my_daily if t.status == 'TODO' %}
-        {% include 'partials/task_card.html' with context %}
-      {% endfor %}
+<!-- Search & Filter Bar -->
+<section class="glass p-4 animate-slide-in mb-6">
+  <div class="flex flex-col md:flex-row gap-4 items-center">
+    <!-- Search Input -->
+    <div class="flex-1 relative">
+      <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+        <svg class="h-5 w-5 text-white/50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+      </div>
+      <input type="text" id="searchInput" placeholder="Search tasks..." 
+             class="form-input pl-10 w-full" 
+             onkeyup="filterTasks()">
     </div>
-  </div>
-  <div class="p-3 glass rounded-xl">
-    <h3 class="font-semibold mb-2">IN PROGRESS</h3>
-    <div class="kanban-col space-y-2" data-status="IN_PROGRESS">
-      {% for t in my_daily if t.status == 'IN_PROGRESS' %}
-        {% include 'partials/task_card.html' with context %}
-      {% endfor %}
-    </div>
-  </div>
-  <div class="p-3 glass rounded-xl">
-    <h3 class="font-semibold mb-2">DONE</h3>
-    <div class="kanban-col space-y-2" data-status="DONE">
-      {% for t in my_daily if t.status == 'DONE' %}
-        {% include 'partials/task_card.html' with context %}
-      {% endfor %}
+    
+    <!-- Quick Filters -->
+    <div class="flex gap-2 flex-wrap">
+      <select id="priorityFilter" onchange="filterTasks()" class="form-input select-modern select-priority text-sm">
+        <option value="">All Priorities</option>
+        <option value="URGENT">🔥 Urgent</option>
+        <option value="HIGH">⚡ High</option>
+        <option value="MEDIUM">📋 Medium</option>
+        <option value="LOW">📝 Low</option>
+      </select>
+      
+      <select id="statusFilter" onchange="filterTasks()" class="form-input select-modern select-status text-sm">
+        <option value="">All Status</option>
+        <option value="TODO">📝 To Do</option>
+        <option value="IN_PROGRESS">⚡ In Progress</option>
+        <option value="REVIEW">👀 Review</option>
+        <option value="DONE">✅ Done</option>
+      </select>
+      
+      <select id="dueDateFilter" onchange="filterTasks()" class="form-input select-modern text-sm">
+        <option value="">All Due Dates</option>
+        <option value="overdue">🔴 Overdue</option>
+        <option value="today">📅 Due Today</option>
+        <option value="week">📆 Due This Week</option>
+        <option value="none">⚪ No Due Date</option>
+      </select>
+      
+      <button onclick="clearFilters()" class="btn btn-secondary text-sm px-3 py-2">
+        🗑️ Clear
+      </button>
+
+      <!-- Saved Views -->
+      <div class="flex items-center gap-2 ml-2">
+        <button onclick="saveCurrentView()" class="btn btn-primary text-sm px-3 py-2">💾 Save View</button>
+        <select id="savedViewsSelect" class="form-input select-modern text-sm" onchange="applySavedView(this.value)">
+          <option value="">My Views...</option>
+        </select>
+        <button onclick="deleteCurrentView()" class="btn text-sm px-3 py-2">🗑️ Delete View</button>
+      </div>
     </div>
   </div>
   
-  <!-- Hidden template reference variable -->
-  {% set board = 'DAILY' %}
+  <!-- Smart Filter Chips -->
+  <div class="flex gap-2 mt-3 flex-wrap">
+    <button onclick="applySmartFilter('my-overdue')" class="smart-filter-chip">
+      🔴 My Overdue Tasks
+    </button>
+    <button onclick="applySmartFilter('high-priority')" class="smart-filter-chip">
+      ⚡ High Priority
+    </button>
+    <button onclick="applySmartFilter('due-soon')" class="smart-filter-chip">
+      ⏰ Due Soon
+    </button>
+    <button onclick="applySmartFilter('in-progress')" class="smart-filter-chip">
+      🚀 In Progress
+    </button>
+    <button onclick="applySmartFilter('no-assignee')" class="smart-filter-chip">
+      👤 Unassigned
+    </button>
+  </div>
+</section>
+
+<!-- Welcome Section -->
+<div class="mb-8 animate-slide-in">
+  <div class="text-center">
+    <h1 class="text-3xl font-bold mb-2">Welcome back, {{ user.name }}! 👋</h1>
+    <p class="text-white/70">Here's your task overview for today</p>
+  </div>
 </div>
 
-<h2 class="text-lg font-semibold mb-2">Other Tasks</h2>
-<div class="grid grid-cols-1 md:grid-cols-4 gap-4" id="board-other" data-board="OTHER">
-  <div class="p-3 glass rounded-xl">
-    <h3 class="font-semibold mb-2">BACKLOG</h3>
-    <div class="kanban-col space-y-2" data-status="BACKLOG">
-      {% for t in my_other if t.status == 'BACKLOG' %}
-        {% include 'partials/task_card.html' with context %}
-      {% endfor %}
+<!-- Stats Cards -->
+<div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+  <div class="stat-card p-6 text-center animate-slide-in">
+    <div class="text-3xl font-bold text-yellow-400 mb-2">{{ counts.due_today }}</div>
+    <div class="text-sm text-white/70">Due Today</div>
+    <div class="w-full bg-yellow-400/20 rounded-full h-2 mt-3">
+      <div class="bg-yellow-400 h-2 rounded-full" style="width: {{ (counts.due_today / 10 * 100) if counts.due_today <= 10 else 100 }}%"></div>
     </div>
   </div>
-  <div class="p-3 glass rounded-xl">
-    <h3 class="font-semibold mb-2">IN PROGRESS</h3>
-    <div class="kanban-col space-y-2" data-status="IN_PROGRESS">
-      {% for t in my_other if t.status == 'IN_PROGRESS' %}
-        {% include 'partials/task_card.html' with context %}
-      {% endfor %}
+  
+  <div class="stat-card p-6 text-center animate-slide-in">
+    <div class="text-3xl font-bold text-blue-400 mb-2">{{ counts.in_progress }}</div>
+    <div class="text-sm text-white/70">In Progress</div>
+    <div class="w-full bg-blue-400/20 rounded-full h-2 mt-3">
+      <div class="bg-blue-400 h-2 rounded-full" style="width: {{ (counts.in_progress / 5 * 100) if counts.in_progress <= 5 else 100 }}%"></div>
     </div>
   </div>
-  <div class="p-3 glass rounded-xl">
-    <h3 class="font-semibold mb-2">REVIEW</h3>
-    <div class="kanban-col space-y-2" data-status="REVIEW">
-      {% for t in my_other if t.status == 'REVIEW' %}
-        {% include 'partials/task_card.html' with context %}
-      {% endfor %}
+  
+  <div class="stat-card p-6 text-center animate-slide-in">
+    <div class="text-3xl font-bold text-purple-400 mb-2">{{ counts.review }}</div>
+    <div class="text-sm text-white/70">In Review</div>
+    <div class="w-full bg-purple-400/20 rounded-full h-2 mt-3">
+      <div class="bg-purple-400 h-2 rounded-full" style="width: {{ (counts.review / 3 * 100) if counts.review <= 3 else 100 }}%"></div>
     </div>
   </div>
-  <div class="p-3 glass rounded-xl">
-    <h3 class="font-semibold mb-2">DONE</h3>
-    <div class="kanban-col space-y-2" data-status="DONE">
-      {% for t in my_other if t.status == 'DONE' %}
-        {% include 'partials/task_card.html' with context %}
-      {% endfor %}
+  
+  <div class="stat-card p-6 text-center animate-slide-in">
+    <div class="text-3xl font-bold text-red-400 mb-2">{{ counts.overdue }}</div>
+    <div class="text-sm text-white/70">Overdue</div>
+    <div class="w-full bg-red-400/20 rounded-full h-2 mt-3">
+      <div class="bg-red-400 h-2 rounded-full" style="width: {{ (counts.overdue / 3 * 100) if counts.overdue <= 3 else 100 }}%"></div>
     </div>
   </div>
-
-  <!-- Hidden template reference variable -->
-  {% set board = 'OTHER' %}
 </div>
+
+<!-- Daily Tasks Section -->
+<div class="mb-12 animate-slide-in">
+  <div class="flex items-center gap-3 mb-6">
+    <div class="w-1 h-8 bg-gradient-to-b from-yellow-400 to-orange-400 rounded-full"></div>
+    <h2 class="text-2xl font-bold">🌅 Daily Tasks</h2>
+    <div class="flex-1 h-px bg-gradient-to-r from-white/20 to-transparent"></div>
+  </div>
+  
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6" id="board-daily" data-board="DAILY">
+    <!-- TODO Column -->
+    <div class="glass p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <div class="w-3 h-3 bg-gray-400 rounded-full"></div>
+        <h3 class="font-semibold text-lg">TODO</h3>
+        <div class="ml-auto bg-gray-400/20 text-gray-300 px-2 py-1 rounded-full text-xs">
+          {{ my_daily|selectattr('status', 'equalto', 'TODO')|list|length }}
+        </div>
+      </div>
+      <div class="kanban-col space-y-3" data-status="TODO">
+        {% for t in my_daily if t.status == 'TODO' %}
+          {% include 'partials/task_card.html' with context %}
+        {% endfor %}
+        {% if not (my_daily|selectattr('status', 'equalto', 'TODO')|list) %}
+          <div class="text-center text-white/40 py-8">
+            <div class="text-4xl mb-2">✨</div>
+            <p>No tasks to do!</p>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- IN PROGRESS Column -->
+    <div class="glass p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <div class="w-3 h-3 bg-blue-400 rounded-full animate-pulse"></div>
+        <h3 class="font-semibold text-lg">IN PROGRESS</h3>
+        <div class="ml-auto bg-blue-400/20 text-blue-300 px-2 py-1 rounded-full text-xs">
+          {{ my_daily|selectattr('status', 'equalto', 'IN_PROGRESS')|list|length }}
+        </div>
+      </div>
+      <div class="kanban-col space-y-3" data-status="IN_PROGRESS">
+        {% for t in my_daily if t.status == 'IN_PROGRESS' %}
+          {% include 'partials/task_card.html' with context %}
+        {% endfor %}
+        {% if not (my_daily|selectattr('status', 'equalto', 'IN_PROGRESS')|list) %}
+          <div class="text-center text-white/40 py-8">
+            <div class="text-4xl mb-2">⚡</div>
+            <p>Ready to work!</p>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- DONE Column -->
+    <div class="glass p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <div class="w-3 h-3 bg-green-400 rounded-full"></div>
+        <h3 class="font-semibold text-lg">DONE</h3>
+        <div class="ml-auto bg-green-400/20 text-green-300 px-2 py-1 rounded-full text-xs">
+          {{ my_daily|selectattr('status', 'equalto', 'DONE')|list|length }}
+        </div>
+      </div>
+      <div class="kanban-col space-y-3" data-status="DONE">
+        {% for t in my_daily if t.status == 'DONE' %}
+          {% include 'partials/task_card.html' with context %}
+        {% endfor %}
+        {% if not (my_daily|selectattr('status', 'equalto', 'DONE')|list) %}
+          <div class="text-center text-white/40 py-8">
+            <div class="text-4xl mb-2">🎯</div>
+            <p>Complete tasks!</p>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Project Tasks Section -->
+<div class="animate-slide-in">
+  <div class="flex items-center gap-3 mb-6">
+    <div class="w-1 h-8 bg-gradient-to-b from-purple-400 to-pink-400 rounded-full"></div>
+    <h2 class="text-2xl font-bold">🚀 Project Tasks</h2>
+    <div class="flex-1 h-px bg-gradient-to-r from-white/20 to-transparent"></div>
+  </div>
+  
+  <div class="grid grid-cols-1 lg:grid-cols-4 gap-6" id="board-other" data-board="OTHER">
+    <!-- BACKLOG Column -->
+    <div class="glass p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <div class="w-3 h-3 bg-gray-400 rounded-full"></div>
+        <h3 class="font-semibold">BACKLOG</h3>
+        <div class="ml-auto bg-gray-400/20 text-gray-300 px-2 py-1 rounded-full text-xs">
+          {{ my_other|selectattr('status', 'equalto', 'BACKLOG')|list|length }}
+        </div>
+      </div>
+      <div class="kanban-col space-y-3" data-status="BACKLOG">
+        {% for t in my_other if t.status == 'BACKLOG' %}
+          {% include 'partials/task_card.html' with context %}
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- IN PROGRESS Column -->
+    <div class="glass p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <div class="w-3 h-3 bg-blue-400 rounded-full animate-pulse"></div>
+        <h3 class="font-semibold">IN PROGRESS</h3>
+        <div class="ml-auto bg-blue-400/20 text-blue-300 px-2 py-1 rounded-full text-xs">
+          {{ my_other|selectattr('status', 'equalto', 'IN_PROGRESS')|list|length }}
+        </div>
+      </div>
+      <div class="kanban-col space-y-3" data-status="IN_PROGRESS">
+        {% for t in my_other if t.status == 'IN_PROGRESS' %}
+          {% include 'partials/task_card.html' with context %}
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- REVIEW Column -->
+    <div class="glass p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <div class="w-3 h-3 bg-yellow-400 rounded-full"></div>
+        <h3 class="font-semibold">REVIEW</h3>
+        <div class="ml-auto bg-yellow-400/20 text-yellow-300 px-2 py-1 rounded-full text-xs">
+          {{ my_other|selectattr('status', 'equalto', 'REVIEW')|list|length }}
+        </div>
+      </div>
+      <div class="kanban-col space-y-3" data-status="REVIEW">
+        {% for t in my_other if t.status == 'REVIEW' %}
+          {% include 'partials/task_card.html' with context %}
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- DONE Column -->
+    <div class="glass p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <div class="w-3 h-3 bg-green-400 rounded-full"></div>
+        <h3 class="font-semibold">DONE</h3>
+        <div class="ml-auto bg-green-400/20 text-green-300 px-2 py-1 rounded-full text-xs">
+          {{ my_other|selectattr('status', 'equalto', 'DONE')|list|length }}
+        </div>
+      </div>
+      <div class="kanban-col space-y-3" data-status="DONE">
+        {% for t in my_other if t.status == 'DONE' %}
+          {% include 'partials/task_card.html' with context %}
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Hidden template variables -->
+{% set board = 'DAILY' %}
+{% set board = 'OTHER' %}
 {% endblock %}
 
 

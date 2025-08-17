@@ -3,39 +3,452 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ title or 'Tasks' }}</title>
+  <title>{{ title or 'Task Management' }} — Lumen Orders</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <link rel="icon" href="/favicon.ico">
   <style>
-    .kanban-col { min-height: 200px; }
-    /* Match site's glass look */
+    :root { 
+      --brand: #a78bfa; 
+      --brand-strong: #8b5cf6; 
+      --accent: #f0abfc; 
+    }
+
+    /* Dark mode variables */
+    [data-theme="light"] {
+      --bg-primary: linear-gradient(135deg, #f8fafc, #e2e8f0);
+      --bg-secondary: rgba(255, 255, 255, 0.8);
+      --text-primary: #1e293b;
+      --text-secondary: #64748b;
+      --border-color: rgba(148, 163, 184, 0.3);
+    }
+
+    [data-theme="dark"] {
+      --bg-primary: linear-gradient(135deg, #0f172a, #1e1b4b, #581c87);
+      --bg-secondary: rgba(255, 255, 255, 0.08);
+      --text-primary: #f8fafc;
+      --text-secondary: rgba(255, 255, 255, 0.7);
+      --border-color: rgba(255, 255, 255, 0.1);
+    }
+
+    /* Glass Morphism */
     .glass {
-      background: rgba(255,255,255,0.06);
-      border: 1px solid rgba(255,255,255,0.08);
-      backdrop-filter: blur(8px);
+      backdrop-filter: blur(10px);
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 1.25rem;
       box-shadow: 0 10px 25px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.05);
     }
-    .chip {
-      background: rgba(59,130,246,0.18);
-      border: 1px solid rgba(59,130,246,0.35);
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 1rem;
+      padding: .6rem 1rem;
+      font-weight: 600;
+      box-shadow: 0 6px 20px rgba(168,139,250,.25), inset 0 1px 0 rgba(255,255,255,.08);
+      transition: all 0.2s ease;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--brand-strong), var(--accent));
+      color: #0b0416;
+    }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 25px rgba(168,139,250,.4);
+    }
+    .btn-secondary {
+      background: rgba(255,255,255,.08);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,.2);
+    }
+    .btn-secondary:hover {
+      background: rgba(255,255,255,.12);
+      transform: translateY(-1px);
+    }
+
+    /* Task Cards */
+    .task-card {
+      backdrop-filter: blur(8px);
+      background: linear-gradient(145deg, rgba(255,255,255,.08), rgba(255,255,255,.04));
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: 1rem;
+      transition: all 0.3s ease;
+      cursor: move;
+    }
+    .task-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 12px 30px rgba(0,0,0,0.3);
+      border-color: rgba(255,255,255,.25);
+    }
+
+    /* Priority Chips */
+    .priority-low { background: rgba(34,197,94,0.2); border: 1px solid rgba(34,197,94,0.4); color: #bbf7d0; }
+    .priority-medium { background: rgba(59,130,246,0.2); border: 1px solid rgba(59,130,246,0.4); color: #bfdbfe; }
+    .priority-high { background: rgba(245,158,11,0.2); border: 1px solid rgba(245,158,11,0.4); color: #fde68a; }
+    .priority-urgent { background: rgba(239,68,68,0.2); border: 1px solid rgba(239,68,68,0.4); color: #fecaca; }
+
+    /* Status Columns */
+    .kanban-col { 
+      min-height: 300px; 
+      padding: 1rem;
+      border-radius: 1rem;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .kanban-col.drag-over {
+      background: rgba(168,139,250,0.1);
+      border-color: var(--brand);
+    }
+
+    /* Form Inputs */
+    .form-input {
+      background: rgba(15,23,42,0.6);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 0.75rem;
+      padding: 0.75rem 1rem;
+      color: white;
+      transition: all 0.2s ease;
+    }
+    .form-input:focus {
+      outline: none;
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(168,139,250,0.1);
+    }
+
+    /* Modern select dropdowns */
+    .select-modern {
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      background: linear-gradient(145deg, rgba(255,255,255,.08), rgba(255,255,255,.04));
+      border: 1px solid rgba(255,255,255,.15);
+      color: var(--text-primary);
+      padding-right: 2.25rem; /* space for caret */
+      backdrop-filter: blur(8px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.06);
+      position: relative;
+    }
+    .select-modern:focus {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(168,139,250,0.12);
+    }
+    .select-modern:hover {
+      border-color: rgba(255,255,255,.25);
+      background: linear-gradient(145deg, rgba(255,255,255,.10), rgba(255,255,255,.06));
+    }
+    /* Custom caret */
+    .select-modern {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%23a78bfa' viewBox='0 0 16 16'%3E%3Cpath d='M3.204 5h9.592L8 10.481 3.204 5z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right .75rem center;
+      background-size: 14px 14px;
+    }
+    /* Themed variants */
+    .select-status { border-color: rgba(59,130,246,.25); }
+    .select-priority { border-color: rgba(245,158,11,.25); }
+    .select-assignee { border-color: rgba(168,139,250,.35); }
+
+    /* Dropdown option popover backgrounds (browser support varies) */
+    .select-modern option { background-color: #0f172a; color: #e2e8f0; }
+    [data-theme="dark"] .select-modern option { background-color: #0f172a; color: #e2e8f0; }
+    [data-theme="light"] .select-modern option { background-color: #ffffff; color: #1e293b; }
+    .select-modern option:checked { background-color: #1e1b4b; color: #fff; }
+    .select-modern option:hover { background-color: #1e1b4b; color: #fff; }
+
+    /* Hint to user agent for dark form controls */
+    [data-theme="dark"] { color-scheme: dark; }
+
+    /* Navigation */
+    .nav-item {
+      padding: 0.5rem 1rem;
+      border-radius: 0.75rem;
+      transition: all 0.2s ease;
+      text-decoration: none;
+    }
+    .nav-item:hover {
+      background: rgba(255,255,255,0.08);
+      transform: translateY(-1px);
+    }
+    .nav-item.active {
+      background: linear-gradient(135deg, var(--brand-strong), var(--accent));
+      color: #0b0416;
+      font-weight: 600;
+    }
+
+    /* Animations */
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-slide-in { animation: slideIn 0.3s ease-out; }
+
+    /* Scrollbar */
+    * { scrollbar-width: thin; scrollbar-color: var(--brand) #0f172a; }
+    *::-webkit-scrollbar { height: 8px; width: 8px; }
+    *::-webkit-scrollbar-thumb { background: var(--brand); border-radius: 8px; }
+
+    /* Stats Cards */
+    .stat-card {
+      background: linear-gradient(145deg, rgba(255,255,255,.1), rgba(255,255,255,.05));
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: 1rem;
+      transition: all 0.3s ease;
+    }
+    .stat-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+    }
+
+    /* Enhanced Task Cards */
+    .task-card {
+      background: rgba(255,255,255,0.08);
+      backdrop-filter: blur(10px);
+      border-radius: 0.75rem;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
+      overflow: hidden;
+    }
+    .task-card:hover {
+      transform: translateY(-2px) scale(1.02);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+      background: rgba(255,255,255,0.12);
+    }
+    .task-card:active {
+      transform: translateY(0) scale(0.98);
+    }
+
+    /* Task card glow effect */
+    .task-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+    .task-card:hover::before {
+      opacity: 1;
+    }
+
+    /* Avatar animations */
+    .avatar-ring {
+      transition: all 0.2s ease;
+    }
+    .task-card:hover .avatar-ring {
+      transform: scale(1.1);
+      box-shadow: 0 0 0 2px rgba(255,255,255,0.4);
+    }
+
+    /* Progress bar animations */
+    @keyframes shimmer {
+      0% { background-position: -200px 0; }
+      100% { background-position: 200px 0; }
+    }
+    .progress-shimmer {
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+      background-size: 200px 100%;
+      animation: shimmer 2s infinite;
+    }
+
+    /* Smart Filter Chips */
+    .smart-filter-chip {
+      padding: 0.5rem 1rem;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 1.5rem;
+      color: rgba(255,255,255,0.8);
+      font-size: 0.75rem;
+      font-weight: 500;
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+    .smart-filter-chip:hover {
+      background: rgba(255,255,255,0.2);
+      color: white;
+      transform: translateY(-1px);
+    }
+    .smart-filter-chip.active {
+      background: linear-gradient(135deg, var(--brand), var(--accent));
+      color: #0b0416;
+      border-color: var(--brand);
+    }
+
+    /* Filter animations */
+    .task-card.filtered-out {
+      opacity: 0.3;
+      transform: scale(0.95);
+      pointer-events: none;
+    }
+    .task-card.filtered-in {
+      opacity: 1;
+      transform: scale(1);
+      pointer-events: auto;
     }
   </style>
 </head>
-<body class="bg-slate-900 text-white min-h-screen">
-  <header class="p-4 border-b border-white/10 flex items-center justify-between">
-    <h1 class="text-xl font-semibold">{{ header or 'Employee Task Dashboard' }}</h1>
-    <nav class="space-x-4 text-sm">
-      <a href="/dashboard" class="hover:underline">My Dashboard</a>
-      <a href="/team" class="hover:underline">Team</a>
-      <a href="/admin/tasks" class="hover:underline">Admin</a>
+<body class="min-h-screen transition-colors duration-300" style="background: var(--bg-primary); color: var(--text-primary);">
+  <!-- Header -->
+  <header class="sticky top-0 z-10 backdrop-blur bg-slate-900/40 border-b border-white/10">
+    <div class="mx-auto max-w-7xl px-4 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-4">
+        <div class="w-10 h-10 rounded-xl" style="background:linear-gradient(135deg,var(--brand),var(--accent))"></div>
+        <div>
+          <h1 class="text-xl font-semibold tracking-wide">{{ header or 'Task Management' }}</h1>
+          <p class="text-sm text-white/60">Lumen Orders</p>
+        </div>
+      </div>
+      
+      <nav class="flex items-center gap-2">
+        <a href="/task" class="nav-item {{ 'active' if request.url.path == '/task' else '' }}">
+          📊 Dashboard
+        </a>
+        <a href="/team" class="nav-item {{ 'active' if request.url.path == '/team' else '' }}">
+          👥 Team
+        </a>
+        {% if user and user.role in ['ADMIN', 'MANAGER'] %}
+        <a href="/admin/tasks" class="nav-item {{ 'active' if request.url.path == '/admin/tasks' else '' }}">
+          ⚙️ Admin
+        </a>
+        {% endif %}
+        
+        <!-- Dark Mode Toggle -->
+        <button onclick="toggleDarkMode()" class="nav-item p-2" title="Toggle Dark Mode" id="darkModeToggle">
+          <span id="darkModeIcon">🌙</span>
+        </button>
     </nav>
+    </div>
   </header>
-  <main class="p-4">
+
+  <!-- Main Content -->
+  <main class="mx-auto max-w-7xl px-4 py-6">
     {% block content %}{% endblock %}
   </main>
+
+  <!-- Task Detail Modal -->
+  <div id="taskModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 hidden items-center justify-center p-4">
+    <div class="bg-slate-900 rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden shadow-2xl">
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between p-6 border-b border-white/10">
+        <h2 id="modalTitle" class="text-xl font-bold">Task Details</h2>
+        <button onclick="closeTaskModal()" class="p-2 hover:bg-white/10 rounded-lg transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Modal Content -->
+      <div class="flex h-[calc(90vh-80px)]">
+        <!-- Left Panel - Task Info -->
+        <div class="flex-1 p-6 overflow-y-auto">
+          <div id="taskDetails" class="space-y-6">
+            <!-- Task details will be loaded here -->
+            <div class="animate-pulse">
+              <div class="h-4 bg-white/10 rounded w-3/4 mb-4"></div>
+              <div class="h-20 bg-white/10 rounded mb-4"></div>
+              <div class="h-4 bg-white/10 rounded w-1/2"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Panel - Comments & Activity -->
+        <div class="w-96 border-l border-white/10 flex flex-col">
+          <!-- Comments Header -->
+          <div class="p-4 border-b border-white/10">
+            <h3 class="font-semibold flex items-center gap-2">
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 01-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7z" clip-rule="evenodd" />
+              </svg>
+              Comments & Activity
+            </h3>
+          </div>
+
+          <!-- Comments List -->
+          <div id="commentsList" class="flex-1 p-4 overflow-y-auto space-y-3">
+            <!-- Comments will be loaded here -->
+          </div>
+
+          <!-- Add Comment Form -->
+          <div class="p-4 border-t border-white/10">
+            <form id="addCommentForm" class="space-y-3">
+              <textarea id="commentText" placeholder="Add a comment..." 
+                        class="w-full p-3 bg-white/5 border border-white/20 rounded-lg resize-none focus:outline-none focus:border-purple-400" 
+                        rows="3"></textarea>
+              <div class="flex justify-between items-center">
+                <button type="button" onclick="closeTaskModal()" class="text-sm text-white/60 hover:text-white">Cancel</button>
+                <button type="submit" class="btn btn-primary text-sm px-4 py-2">Add Comment</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Enhanced JavaScript -->
   <script src="/static/js/tasks.js"></script>
+  <script>
+    // Add loading states and animations
+    document.addEventListener('DOMContentLoaded', function() {
+      // Animate elements on load
+      document.querySelectorAll('.animate-slide-in').forEach((el, index) => {
+        el.style.animationDelay = `${index * 0.1}s`;
+      });
+
+      // Form submission feedback
+      document.addEventListener('htmx:afterRequest', function(evt) {
+        if (evt.detail.successful) {
+          // Show success animation
+          const target = evt.target;
+          if (target.tagName === 'FORM') {
+            target.style.transform = 'scale(1.02)';
+            setTimeout(() => {
+              target.style.transform = 'scale(1)';
+            }, 200);
+          }
+        }
+      });
+    });
+
+    // Dark Mode Toggle
+    function toggleDarkMode() {
+      const html = document.documentElement;
+      const currentTheme = html.getAttribute('data-theme');
+      const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+      
+      html.setAttribute('data-theme', newTheme);
+      localStorage.setItem('theme', newTheme);
+      
+      // Update icon
+      const icon = document.getElementById('darkModeIcon');
+      icon.textContent = newTheme === 'light' ? '🌙' : '☀️';
+      
+      // Show notification
+      if (window.taskUtils && window.taskUtils.showNotification) {
+        window.taskUtils.showNotification(
+          `${newTheme === 'light' ? '☀️ Light' : '🌙 Dark'} mode activated`, 
+          'info'
+        );
+      }
+    }
+
+    // Initialize theme on page load
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    
+    const icon = document.getElementById('darkModeIcon');
+    if (icon) {
+      icon.textContent = savedTheme === 'light' ? '🌙' : '☀️';
+    }
+  </script>
 </body>
 </html>
 

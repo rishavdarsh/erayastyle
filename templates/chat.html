@@ -1,0 +1,117 @@
+{% extends "layout_base.html" %}
+
+{% block content %}
+<div class="flex h-screen">
+  <!-- Channel List -->
+  <div class="w-64 bg-white/5 p-4">
+    <h2 class="text-lg font-semibold mb-4">Channels</h2>
+    <div id="channelList" class="space-y-2">
+      <!-- Channels loaded via JS -->
+    </div>
+  </div>
+
+  <!-- Messages Area -->
+  <div class="flex-1 flex flex-col">
+    <div id="messageArea" class="flex-1 p-4 overflow-y-auto space-y-4">
+      <!-- Messages loaded via JS -->
+    </div>
+
+    <!-- Message Input -->
+    <div class="p-4 bg-white/5">
+      <form id="messageForm" class="flex gap-2">
+        <input type="hidden" id="currentChannel" value="">
+        <input
+          type="text"
+          id="messageText"
+          class="flex-1 bg-white/10 rounded px-3 py-2 text-white placeholder-white/50"
+          placeholder="Type a message..."
+          required
+        >
+        <button type="submit" class="bg-brand hover:bg-brand-strong px-4 py-2 rounded">Send</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentChannelId = null;
+
+async function loadChannels() {
+  const response = await fetch('/api/chat/channels');
+  const channels = await response.json();
+  
+  const list = document.getElementById('channelList');
+  list.innerHTML = channels.map(c => `
+    <button
+      onclick="selectChannel('${c.id}', '${c.name}')"
+      class="w-full text-left px-3 py-2 rounded hover:bg-white/10 ${
+        c.id === currentChannelId ? 'bg-white/10' : ''
+      }"
+    >
+      # ${c.name}
+    </button>
+  `).join('');
+  
+  // Select first channel by default
+  if (channels.length > 0 && !currentChannelId) {
+    selectChannel(channels[0].id, channels[0].name);
+  }
+}
+
+async function loadMessages(channelId) {
+  const response = await fetch(`/api/chat/messages/${channelId}`);
+  const messages = await response.json();
+  
+  const area = document.getElementById('messageArea');
+  area.innerHTML = messages.reverse().map(m => `
+    <div class="bg-white/5 rounded p-3">
+      <div class="font-medium text-sm text-brand">${m.author}</div>
+      <div class="mt-1 text-white/80">${m.text}</div>
+      <div class="mt-1 text-xs text-white/50">${new Date(m.created_at).toLocaleString()}</div>
+    </div>
+  `).join('');
+  area.scrollTop = area.scrollHeight;
+}
+
+function selectChannel(channelId, channelName) {
+  currentChannelId = channelId;
+  document.getElementById('currentChannel').value = channelId;
+  loadMessages(channelId);
+  loadChannels(); // Refresh selection
+}
+
+document.getElementById('messageForm').onsubmit = async (e) => {
+  e.preventDefault();
+  
+  const channelId = document.getElementById('currentChannel').value;
+  const text = document.getElementById('messageText').value.trim();
+  if (!channelId || !text) return;
+  
+  const formData = new FormData();
+  formData.append('channel_id', channelId);
+  formData.append('text', text);
+  
+  try {
+    await fetch('/api/chat/messages', {
+      method: 'POST',
+      body: formData
+    });
+    
+    document.getElementById('messageText').value = '';
+    loadMessages(channelId);
+  } catch (error) {
+    console.error('Failed to send message:', error);
+  }
+};
+
+// Initial load
+loadChannels();
+
+// Poll for updates every 5 seconds
+setInterval(() => {
+  if (currentChannelId) {
+    loadMessages(currentChannelId);
+  }
+}, 5000);
+</script>
+{% endblock %}

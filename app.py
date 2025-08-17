@@ -1,4 +1,4 @@
-﻿import os
+import os
 import uuid
 import threading
 import hashlib
@@ -53,7 +53,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self.protected_paths = {
             "/hub", "/orders", "/packing", "/attendance", "/admin/users", 
             "/shopify/settings", "/chat", "/team", "/admin/settings", 
-            "/admin/security", "/admin/analytics"
+            "/admin/security", "/admin/analytics", "/task"
         }
         # Public paths that don't require authentication
         self.public_paths = {"/", "/login", "/static", "/favicon.ico"}
@@ -168,7 +168,7 @@ UNIFIED_NAVIGATION_MENU = [
     {"id": "packing", "name": "Packing Management", "icon": "📦", "url": "/packing", "active": True, "required_roles": []},
     {"id": "attendance", "name": "Employee Attendance", "icon": "🗓️", "url": "/attendance", "active": True, "required_roles": []},
     {"id": "chat", "name": "Team Chat", "icon": "💬", "url": "/chat", "active": True, "required_roles": []},
-    {"id": "tasks", "name": "Tasks", "icon": "📝", "url": "/dashboard", "active": True, "required_roles": []},
+    {"id": "tasks", "name": "Tasks", "icon": "📝", "url": "/task", "active": True, "required_roles": []},
     {"id": "reports", "name": "Reports & Analytics", "icon": "📊", "url": "/attendance/report_page", "active": True, "required_roles": []},
     {"id": "separator", "type": "separator", "name": "Additional Features"},
     {"id": "team", "name": "Team Management", "icon": "👥", "url": "/team", "active": False, "badge": "Soon", "required_roles": ["owner", "admin"]},
@@ -558,6 +558,53 @@ def sync_user_databases():
     save_users_database()
     save_users_auth()
 
+
+def sync_user_to_task_system(employee_id: str, user_data: dict, auth_data: dict):
+    """Sync a single user to the task management system."""
+    try:
+        from models import SessionLocal, User as TaskUser
+        
+        db = SessionLocal()
+        
+        # Role mapping
+        role_map = {
+            "owner": "ADMIN", 
+            "admin": "ADMIN", 
+            "manager": "MANAGER",
+            "packer": "EMPLOYEE",
+            "employee": "EMPLOYEE"
+        }
+        mapped_role = role_map.get(user_data.get("role", "").lower(), "EMPLOYEE")
+        
+        # Find or create user in task system
+        task_user = db.query(TaskUser).filter(TaskUser.id == employee_id).first()
+        
+        if not task_user:
+            # Create new user
+            task_user = TaskUser(
+                id=employee_id,
+                email=user_data.get('email', f"{employee_id}@company.com"),
+                name=user_data.get("name", employee_id),
+                password_hash="synced_from_main_app",
+                role=mapped_role,
+                team=user_data.get('team', None)
+            )
+            db.add(task_user)
+        else:
+            # Update existing user
+            task_user.name = user_data.get("name", employee_id)
+            task_user.role = mapped_role
+            task_user.email = user_data.get('email', f"{employee_id}@company.com")
+            task_user.team = user_data.get('team', None)
+        
+        db.commit()
+        db.close()
+        print(f"Successfully synced user {employee_id} to task system")
+        
+    except Exception as e:
+        print(f"Failed to sync user {employee_id} to task system: {e}")
+        raise
+
 # Initialize database synchronization
 sync_user_databases()
 
@@ -744,7 +791,6 @@ USER_AUDIT_TRAIL = []
 def get_timestamp():
     """Returns current UTC timestamp in ISO format."""
     return datetime.datetime.utcnow().isoformat()
-
 # -------------------- USER MANAGEMENT HELPERS --------------------
 def log_user_activity(user_id: str, action: str, details: str = "", ip_address: str = ""):
     """Log user activity for audit trail."""
@@ -1042,11 +1088,20 @@ except Exception:
     templates = Jinja2Templates(directory="templates")
 
 # Include Tasks router
+# Include Tasks router
 try:
     from routers.tasks import router as tasks_router
+    from routers.chat_channels import router as chat_channels_router
+    from routers.chat_messages import router as chat_messages_router
+    from routers.tasks_ultra import router as tasks_ultra_router
+
     app.include_router(tasks_router, prefix="")
+    app.include_router(chat_channels_router, prefix="")
+    app.include_router(chat_messages_router, prefix="")
+    app.include_router(tasks_ultra_router, prefix="")
 except Exception as e:
-    print(f"Warning: could not include tasks router: {e}")
+    print(f"Warning: could not include routers: {e}")
+
 
 # DB init for tasks module
 try:
@@ -1539,7 +1594,6 @@ def _eraya_lumen_page(title: str, body_html: str) -> HTMLResponse:
 def root():
     """Redirect root to login page."""
     return RedirectResponse(url="/login")
-
 # -------------------- LOGIN PAGE --------------------
 @app.get("/login")
 def login_page():
@@ -1710,7 +1764,12 @@ def login_page():
     """
     return HTMLResponse(html)
 
-# -------------------- DASHBOARD --------------------
+@app.get("/chat")
+def chat_page(request: Request, current_user: Dict = Depends(require_roles())):
+    """Chat interface."""
+    return templates.TemplateResponse("chat.html", {"request": request})
+
+
 @app.get("/hub")
 def eraya_hub_home(current_user: Dict = Depends(require_roles())):
     # Get user info for personalized greeting
@@ -3032,7 +3091,6 @@ def eraya_orders_page(current_user: Dict = Depends(require_roles("owner", "admin
             fetchUnfulfilledCustomBtn.textContent = '📅 Custom Date Range';
           });
       }
-      
       fetchUnfulfilledCustomBtn.onclick = fetchUnfulfilledCustomRange;
       
       // Fetch ALL orders across all pages
@@ -3114,7 +3172,6 @@ def eraya_orders_page(current_user: Dict = Depends(require_roles("owner", "admin
             fetchAllBtn.textContent = '🚀 Fetch ALL Orders (All Pages)';
           });
       }
-      
       fetchAllBtn.onclick = fetchAllOrders;
       
       loadMoreBtn.onclick=function(){
@@ -3821,7 +3878,6 @@ def toggle_user_status(user_id: str, admin_user: str = "EMP001", current_user: D
         "old_status": old_status,
         "new_status": new_status
     })
-
 @app.post("/api/users/{user_id}/change-role")
 def change_user_role(user_id: str, role_data: dict, admin_user: str = "EMP001", current_user: Dict = Depends(require_roles("owner", "admin"))):
     """Change user role and permissions."""
@@ -3857,6 +3913,12 @@ def change_user_role(user_id: str, role_data: dict, admin_user: str = "EMP001", 
     
     # Force synchronization to ensure consistency
     sync_user_databases()
+    
+    # Sync to task system
+    try:
+        sync_user_to_task_system(user_id, user, USERS.get(user_id, {}))
+    except Exception as e:
+        print(f"Warning: Failed to sync role change to task system: {e}")
     
     # Invalidate user sessions to force re-authentication with new role
     # This ensures immediate effect of role changes
@@ -3896,7 +3958,6 @@ def update_user_permissions(user_id: str, permission_data: dict, admin_user: str
         "old_permissions": old_permissions,
         "new_permissions": new_permissions
     })
-
 @app.post("/api/users/{user_id}/change-password")
 def change_user_password(user_id: str, password_data: dict, admin_user: str = "EMP001", current_user: Dict = Depends(require_roles("owner", "admin"))):
     """Change user password."""
@@ -4073,6 +4134,13 @@ async def create_new_user(
     
     # Save USERS to file
     save_users_auth()
+    
+    # Auto-sync to task system
+    try:
+        sync_user_to_task_system(employee_id, user_data, auth_user_data)
+    except Exception as e:
+        # Log error but don't fail user creation
+        print(f"Warning: Failed to sync user {employee_id} to task system: {e}")
     
     # Log audit trail
     log_audit_trail(current_user.get("employee_id", "system"), employee_id, "user_created", "", f"User {name} created with role {role}")
@@ -4600,8 +4668,6 @@ async def upload_chat_file(file: UploadFile = File(...), employee_id: str = Form
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
-
-
 # -------------------- ATTENDANCE --------------------
 @app.post("/api/attendance/check_in")
 def check_in(employee_id: str = Form(...)):
@@ -4688,7 +4754,6 @@ def get_overtime_report(threshold_hours: float = 8.0, employee_id: str | None = 
             overtime = max(0.0, total_hours - threshold_hours)
             overtime_report[emp_id] = {"total_hours": round(total_hours, 2), "overtime_hours": round(overtime, 2)}
     return JSONResponse(content=overtime_report)
-
 @app.get("/api/attendance/export")
 def export_attendance_data(employee_id: str | None = None, start_date: str | None = None, end_date: str | None = None):
     data_for_df = []
@@ -5218,7 +5283,6 @@ def eraya_packing_page(current_user: Dict = Depends(require_roles("owner", "admi
     </script>
     """
     return _eraya_lumen_page("Packing", body)
-
 # -------------------- SHOPIFY SETTINGS PAGE --------------------
 @app.get("/shopify/settings")
 def shopify_settings_page(current_user: Dict = Depends(require_roles("owner", "admin"))):
@@ -5445,8 +5509,6 @@ def shopify_settings_page(current_user: Dict = Depends(require_roles("owner", "a
     </script>
     """
     return _eraya_lumen_page("Shopify Settings", body)
-
-@app.get("/admin/users")
 def user_management_page(current_user: Dict = Depends(require_roles("owner", "admin"))):
     body = """
     <section class="glass p-6">
@@ -5644,7 +5706,7 @@ def user_management_page(current_user: Dict = Depends(require_roles("owner", "ad
             </div>
             
             <div>
-              <label class="block text-sm font-semibold mb-4">Permissions</label>
+              <label class="block text-sm font-semibold mb-2">Permissions</label>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-3" id="rolePermissionsGrid">
                 <!-- Will be populated by JavaScript -->
               </div>
@@ -5911,7 +5973,6 @@ def user_management_page(current_user: Dict = Depends(require_roles("owner", "ad
         80% { transform: translateY(-2px) scale(1.12); }
       }
     </style>
-
     <script>
       // Global variables
       let allUsers = [];
@@ -6708,7 +6769,6 @@ def user_management_page(current_user: Dict = Depends(require_roles("owner", "ad
           }
         });
       }
-      
       async function createNewUser(event) {
         event.preventDefault();
         
@@ -7397,7 +7457,6 @@ def eraya_attendance_page(current_user: Dict = Depends(require_roles("owner", "a
     </script>
     """
     return _eraya_lumen_page("Attendance", body)
-
 @app.get("/attendance/report_page")
 def eraya_attendance_report_page():
     body = """
@@ -7797,7 +7856,6 @@ def eraya_chat_page():
         cursor: pointer;
       }
     </style>
-
     <script>
       // Chat application state
       let currentUser = '';

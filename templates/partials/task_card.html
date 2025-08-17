@@ -1,14 +1,199 @@
-<div class="p-3 rounded glass cursor-move" data-task-id="{{ t.id }}" draggable="true">
-  <div class="flex items-center justify-between">
-    <div class="font-semibold text-sm">{{ t.title }}</div>
-    <span class="text-xs px-2 py-0.5 rounded chip">{{ t.priority }}</span>
+<div class="task-card p-4 cursor-move group border-l-4 
+  {% if t.priority == 'URGENT' %}border-red-500 bg-gradient-to-br from-red-500/10 to-red-600/5
+  {% elif t.priority == 'HIGH' %}border-orange-500 bg-gradient-to-br from-orange-500/10 to-orange-600/5
+  {% elif t.priority == 'MEDIUM' %}border-blue-500 bg-gradient-to-br from-blue-500/10 to-blue-600/5
+  {% else %}border-gray-500 bg-gradient-to-br from-gray-500/10 to-gray-600/5{% endif %}" 
+  data-task-id="{{ t.id }}" draggable="true" onclick="openTaskModal('{{ t.id }}')">
+  <!-- Header -->
+  <div class="flex items-start justify-between mb-3">
+    <div class="flex-1">
+      <h4 class="font-semibold text-sm leading-tight mb-1 group-hover:text-white transition-colors">{{ t.title }}</h4>
+      {% if t.description %}
+      <p class="text-xs text-white/60 line-clamp-2">{{ t.description[:80] }}{% if t.description|length > 80 %}...{% endif %}</p>
+      {% endif %}
+    </div>
+    <span class="text-xs px-2 py-1 rounded-full font-medium ml-2 flex-shrink-0 flex items-center gap-1
+      {% if t.priority == 'URGENT' %}bg-red-500 text-white shadow-lg shadow-red-500/25
+      {% elif t.priority == 'HIGH' %}bg-orange-500 text-white shadow-lg shadow-orange-500/25
+      {% elif t.priority == 'MEDIUM' %}bg-blue-500 text-white shadow-lg shadow-blue-500/25
+      {% else %}bg-gray-500 text-white shadow-lg shadow-gray-500/25{% endif %}">
+      {% if t.priority == 'URGENT' %}🔥{% elif t.priority == 'HIGH' %}⚡{% elif t.priority == 'MEDIUM' %}📋{% else %}📝{% endif %}
+      {{ t.priority }}
+    </span>
   </div>
-  {% if t.due_date %}
-  <div class="text-xs text-white/70 mt-1">Due: {{ t.due_date.strftime('%Y-%m-%d %H:%M') }}</div>
-  {% endif %}
+
+  <!-- Tags -->
   {% if t.tags %}
-  <div class="text-[11px] text-white/70 mt-1">Tags: {{ ', '.join(t.tags) }}</div>
+  <div class="flex flex-wrap gap-1 mb-3">
+    {% for tag in t.tags %}
+    <span class="text-[10px] px-2 py-0.5 rounded-full bg-white/15 text-white/80 border border-white/30 hover:bg-white/25 transition-colors flex items-center gap-1">
+      {% if tag.lower() == 'requireproof' or 'proof' in tag.lower() %}📸
+      {% elif tag.lower() == 'urgent' or 'urgent' in tag.lower() %}⚡
+      {% elif tag.lower() == 'meeting' or 'meeting' in tag.lower() %}🤝
+      {% elif tag.lower() == 'design' or 'design' in tag.lower() %}🎨
+      {% elif tag.lower() == 'bug' or 'bug' in tag.lower() %}🐛
+      {% elif tag.lower() == 'feature' or 'feature' in tag.lower() %}✨
+      {% elif tag.lower() == 'research' or 'research' in tag.lower() %}🔍
+      {% else %}🏷️{% endif %}
+      {{ tag }}
+    </span>
+    {% endfor %}
+  </div>
   {% endif %}
+
+  <!-- Attachments Preview -->
+  {% if t.attachment_count and t.attachment_count > 0 %}
+  <div class="mb-3">
+    <div class="flex items-center justify-between mb-2">
+      <div class="flex items-center gap-1 text-xs text-white/60">
+        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+          <path fill-rule="evenodd" d="M8 4a3 3 0 00-3 3v4a5 5 0 0010 0V7a1 1 0 112 0v4a7 7 0 11-14 0V7a5 5 0 0110 0v4a3 3 0 11-6 0V7a1 1 0 012 0v4a1 1 0 102 0V7a3 3 0 00-3-3z" clip-rule="evenodd" />
+        </svg>
+        <span>{{ t.attachment_count }} file{{ 's' if t.attachment_count != 1 else '' }}</span>
+      </div>
+    </div>
+    
+    <!-- Attachment thumbnails -->
+    <div class="flex gap-1 flex-wrap">
+      {% for attachment in t.attachments[:3] %}
+      <div class="flex items-center gap-1 text-[10px] px-2 py-1 bg-white/10 rounded border border-white/20 hover:bg-white/20 transition-colors cursor-pointer"
+           onclick="downloadAttachment('{{ attachment.id }}')">
+        {% if attachment.is_image %}
+          <span>🖼️</span>
+        {% elif attachment.mime_type.startswith('video/') %}
+          <span>🎥</span>
+        {% elif attachment.mime_type.startswith('audio/') %}
+          <span>🎵</span>
+        {% elif 'pdf' in attachment.mime_type %}
+          <span>📄</span>
+        {% elif 'word' in attachment.mime_type or 'document' in attachment.mime_type %}
+          <span>📝</span>
+        {% elif 'sheet' in attachment.mime_type or 'excel' in attachment.mime_type %}
+          <span>📊</span>
+        {% elif 'zip' in attachment.mime_type or 'rar' in attachment.mime_type %}
+          <span>🗜️</span>
+        {% else %}
+          <span>📎</span>
+        {% endif %}
+        <span class="truncate max-w-[60px]">{{ attachment.original_filename[:10] }}{% if attachment.original_filename|length > 10 %}...{% endif %}</span>
+      </div>
+      {% endfor %}
+      {% if t.attachment_count > 3 %}
+      <div class="flex items-center text-[10px] px-2 py-1 text-white/50">
+        +{{ t.attachment_count - 3 }} more
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Comments Preview -->
+  {% if t.comment_count and t.comment_count > 0 %}
+  <div class="mb-3">
+    <div class="flex items-center justify-between mb-2">
+      <div class="flex items-center gap-1 text-xs text-white/60">
+        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+          <path fill-rule="evenodd" d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 01-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7zM7 9H5v2h2V9zm8 0h-2v2h2V9zM9 9h2v2H9V9z" clip-rule="evenodd" />
+        </svg>
+        <span>{{ t.comment_count }} comment{{ 's' if t.comment_count != 1 else '' }}</span>
+      </div>
+    </div>
+    
+    <!-- Latest comments -->
+    <div class="space-y-1">
+      {% for comment in t.latest_comments[:2] %}
+      <div class="text-[10px] px-2 py-1 bg-white/10 rounded border border-white/20">
+        <div class="flex items-center gap-1 mb-1">
+          <span class="font-medium text-white/80">{{ comment.author.name if comment.author else 'Unknown' }}</span>
+          <span class="text-white/50">•</span>
+          <span class="text-white/50">{{ comment.created_at.strftime('%m/%d %H:%M') }}</span>
+        </div>
+        <div class="text-white/70 line-clamp-2">{{ comment.content[:60] }}{% if comment.content|length > 60 %}...{% endif %}</div>
+      </div>
+      {% endfor %}
+      {% if t.comment_count > 2 %}
+      <div class="text-[10px] text-white/50 px-2">
+        +{{ t.comment_count - 2 }} more comments
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Footer -->
+  <div class="flex items-center justify-between text-xs text-white/50 pt-2 border-t border-white/10">
+    <div class="flex items-center gap-2">
+      <!-- Assignee -->
+      <div class="flex items-center gap-1">
+        {% set user_colors = [
+          'from-purple-400 to-pink-400',
+          'from-blue-400 to-cyan-400', 
+          'from-green-400 to-teal-400',
+          'from-yellow-400 to-orange-400',
+          'from-red-400 to-pink-400',
+          'from-indigo-400 to-purple-400',
+          'from-emerald-400 to-green-400',
+          'from-rose-400 to-red-400'
+        ] %}
+        {% set color_index = (t.assigned_to.id | string | length) % 8 if t.assigned_to else 0 %}
+        <div class="avatar-ring w-5 h-5 rounded-full bg-gradient-to-br {{ user_colors[color_index] }} flex items-center justify-center text-[9px] font-bold text-white shadow-lg ring-2 ring-white/20">
+          {{ t.assigned_to.name[0].upper() if t.assigned_to else '?' }}
+        </div>
+        <span class="text-[10px]">{{ t.assigned_to.name if t.assigned_to else 'Unassigned' }}</span>
+      </div>
+    </div>
+    
+    <!-- Due Date -->
+    {% if t.due_date %}
+    <div class="flex items-center gap-1 {{ 'text-red-400' if t.due_date < now else 'text-white/70' }}">
+      <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+        <path fill-rule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clip-rule="evenodd" />
+      </svg>
+      {{ t.due_date.strftime('%m/%d') }}
+    </div>
+    {% else %}
+    <div class="text-white/30">No due date</div>
+    {% endif %}
+  </div>
+
+  <!-- Progress Indicator -->
+  <div class="mt-3">
+    {% if t.status == 'TODO' %}
+    <div class="flex items-center gap-2 text-xs text-white/50">
+      <div class="w-2 h-2 rounded-full bg-gray-400"></div>
+      <span>Ready to start</span>
+    </div>
+    {% elif t.status == 'IN_PROGRESS' %}
+    <div class="space-y-2">
+      <div class="flex items-center gap-2 text-xs text-blue-400">
+        <div class="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></div>
+        <span>In Progress</span>
+      </div>
+      <div class="w-full bg-white/10 rounded-full h-1.5 overflow-hidden">
+        <div class="bg-gradient-to-r from-blue-400 via-purple-400 to-blue-400 h-full rounded-full progress-shimmer" style="width: 65%;"></div>
+      </div>
+    </div>
+    {% elif t.status == 'REVIEW' %}
+    <div class="flex items-center gap-2 text-xs text-yellow-400">
+      <div class="w-2 h-2 rounded-full bg-yellow-400 animate-bounce"></div>
+      <span>Under Review</span>
+    </div>
+    {% elif t.status == 'DONE' %}
+    <div class="flex items-center gap-2 text-xs text-green-400">
+      <div class="w-3 h-3 rounded-full bg-green-400 flex items-center justify-center">
+        <svg class="w-2 h-2 text-white" fill="currentColor" viewBox="0 0 20 20">
+          <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+        </svg>
+      </div>
+      <span>Completed</span>
+    </div>
+    {% elif t.status == 'BACKLOG' %}
+    <div class="flex items-center gap-2 text-xs text-white/40">
+      <div class="w-2 h-2 rounded-full bg-white/40"></div>
+      <span>Backlog</span>
+    </div>
+    {% endif %}
+  </div>
 </div>
 
 

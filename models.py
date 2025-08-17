@@ -90,6 +90,24 @@ class Comment(Base):
     author = relationship("User")
 
 
+class Attachment(Base):
+    __tablename__ = "attachments"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    task_id = Column(String, ForeignKey("tasks.id"), index=True)
+    uploaded_by_id = Column(String, ForeignKey("users.id"), index=True)
+    filename = Column(String, nullable=False)
+    original_filename = Column(String, nullable=False)
+    file_path = Column(String, nullable=False)
+    file_size = Column(Integer, nullable=False)  # in bytes
+    mime_type = Column(String, nullable=False)
+    is_image = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    task = relationship("Task")
+    uploaded_by = relationship("User")
+
+
 class ActivityLog(Base):
     __tablename__ = "activity_logs"
 
@@ -99,6 +117,18 @@ class ActivityLog(Base):
     action = Column(String)  # CREATE, UPDATE_STATUS, ADD_COMMENT, ADD_ATTACHMENT, MARK_DONE
     meta = Column(_json_column())
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Subtask(Base):
+    __tablename__ = "subtasks"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    task_id = Column(String, ForeignKey("tasks.id"), index=True)
+    title = Column(String, nullable=False)
+    is_completed = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    task = relationship("Task")
 
 
 class Announcement(Base):
