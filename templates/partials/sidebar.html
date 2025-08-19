@@ -1,0 +1,55 @@
+<!-- Sidebar with exact styling from /hub -->
+<div id="sidebar" class="sidebar">
+    <!-- Header -->
+    <div class="sidebar-header">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500"></div>
+            <div>
+                <div class="sidebar-title">Eraya Ops</div>
+                <div class="sidebar-subtitle">
+                    Admin Access 
+                    <span class="access-badge">FULL ACCESS</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="flex-1 overflow-y-auto py-4">
+        <!-- Main Menu -->
+        {% for item in NAV_ITEMS %}
+            {% if item.type == "separator" %}
+                <div class="sidebar-separator">{{ item.name }}</div>
+            {% else %}
+                <a href="{{ item.url }}" class="sidebar-item {{ 'active' if request.url.path == item.url }} {{ 'locked' if not item.active }}">
+                    <div class="sidebar-icon">{{ item.icon }}</div>
+                    <div class="sidebar-text">{{ item.name }}</div>
+                    {% if item.badge %}
+                        <span class="sidebar-badge">{{ item.badge }}</span>
+                        <span class="sidebar-lock">🔒</span>
+                    {% endif %}
+                </a>
+            {% endif %}
+        {% endfor %}
+    </nav>
+
+    <!-- Bottom Items -->
+    <div class="sidebar-bottom">
+        <a href="/" class="sidebar-item">
+            <div class="sidebar-icon">🏠</div>
+            <div class="sidebar-text">Home</div>
+        </a>
+        <div class="sidebar-item" onclick="logout()" style="cursor: pointer;">
+            <div class="sidebar-icon">🚪</div>
+            <div class="sidebar-text">Logout</div>
+        </div>
+    </div>
+</div>
+
+<!-- Mobile Toggle -->
+<button id="sidebarToggle" class="md:hidden fixed top-4 left-4 z-40 p-2 rounded-lg bg-slate-800 text-white">
+    <span class="text-lg">⟨</span>
+</button>
+
+<!-- Mobile Overlay -->
+<div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-30 hidden md:hidden" onclick="toggleSidebar()"></div>

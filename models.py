@@ -90,6 +90,17 @@ class Comment(Base):
     author = relationship("User")
 
 
+class CommentMention(Base):
+    __tablename__ = "comment_mentions"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    comment_id = Column(String, ForeignKey("comments.id"), nullable=False, index=True)
+    mentioned_user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    
+    comment = relationship("Comment")
+    mentioned_user = relationship("User")
+
+
 class Attachment(Base):
     __tablename__ = "attachments"
 

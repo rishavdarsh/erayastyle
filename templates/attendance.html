@@ -1,0 +1,396 @@
+{% extends "layout_base.html" %}
+{% block content %}
+
+<section class="glass p-6">
+  <h1 class="text-3xl font-bold">Employee Attendance</h1>
+  <p class="text-white/80 mt-2">Track and manage employee attendance records.</p>
+  
+  <div class="mt-6 grid gap-6">
+    <!-- Quick Actions -->
+    <div class="glass p-5">
+      <h2 class="text-xl font-semibold mb-4">Quick Actions</h2>
+      <div class="flex flex-wrap gap-3">
+        <button id="clockIn" class="btn btn-primary">🕐 Clock In</button>
+        <button id="clockOut" class="btn btn-secondary">🕐 Clock Out</button>
+        <button id="markBreak" class="btn btn-accent">☕ Break</button>
+        <button id="endBreak" class="btn btn-accent">🔙 End Break</button>
+        <button id="refreshAttendance" class="btn btn-secondary">🔄 Refresh</button>
+      </div>
+      
+      <div id="currentStatus" class="mt-4 p-3 rounded-lg bg-slate-800/50">
+        <div class="text-sm text-white/60">Current Status</div>
+        <div id="statusText" class="text-lg font-medium">Checking...</div>
+        <div id="statusTime" class="text-sm text-white/60"></div>
+      </div>
+    </div>
+    
+    <!-- Today's Summary -->
+    <div class="glass p-5">
+      <h2 class="text-xl font-semibold mb-4">Today's Summary</h2>
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="bg-slate-800/50 p-4 rounded-lg text-center">
+          <div class="text-2xl font-bold text-blue-400" id="todayHours">0.0</div>
+          <div class="text-sm text-white/60">Hours Worked</div>
+        </div>
+        <div class="bg-slate-800/50 p-4 rounded-lg text-center">
+          <div class="text-2xl font-bold text-green-400" id="todayBreaks">0</div>
+          <div class="text-sm text-white/60">Breaks Taken</div>
+        </div>
+        <div class="bg-slate-800/50 p-4 rounded-lg text-center">
+          <div class="text-2xl font-bold text-purple-400" id="todayOvertime">0.0</div>
+          <div class="text-sm text-white/60">Overtime Hours</div>
+        </div>
+        <div class="bg-slate-800/50 p-4 rounded-lg text-center">
+          <div class="text-2xl font-bold text-orange-400" id="todayEarnings">$0</div>
+          <div class="text-sm text-white/60">Today's Earnings</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Attendance Records -->
+    <div class="glass p-5">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-semibold">Recent Attendance</h2>
+        <div class="flex gap-3">
+          <select id="dateRange" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white">
+            <option value="today">Today</option>
+            <option value="week">This Week</option>
+            <option value="month">This Month</option>
+            <option value="custom">Custom Range</option>
+          </select>
+          <button id="exportAttendance" class="btn btn-secondary">📊 Export</button>
+        </div>
+      </div>
+      
+      <!-- Date Range Picker (hidden by default) -->
+      <div id="customDateRange" class="hidden mb-4 flex gap-3">
+        <input type="date" id="startDate" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white">
+        <input type="date" id="endDate" class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white">
+        <button id="applyDateRange" class="btn btn-primary">Apply</button>
+      </div>
+      
+      <!-- Attendance Table -->
+      <div class="overflow-auto">
+        <table class="min-w-full text-sm" id="attendanceTable">
+          <thead class="bg-slate-900/80">
+            <tr>
+              <th class="text-left p-3 border-b border-white/10">Date</th>
+              <th class="text-left p-3 border-b border-white/10">Clock In</th>
+              <th class="text-left p-3 border-b border-white/10">Clock Out</th>
+              <th class="text-left p-3 border-b border-white/10">Break Time</th>
+              <th class="text-left p-3 border-b border-white/10">Total Hours</th>
+              <th class="text-left p-3 border-b border-white/10">Overtime</th>
+              <th class="text-left p-3 border-b border-white/10">Status</th>
+            </tr>
+          </thead>
+          <tbody id="attendanceTableBody">
+            <!-- Attendance records will be loaded here -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- Weekly Chart -->
+    <div class="glass p-5">
+      <h2 class="text-xl font-semibold mb-4">Weekly Hours Chart</h2>
+      <div id="weeklyChart" class="h-64 flex items-end justify-between gap-2 bg-slate-800/30 p-4 rounded-lg">
+        <!-- Chart bars will be generated here -->
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .status-in { background: #10b981; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+  .status-out { background: #6b7280; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+  .status-break { background: #f59e0b; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+  .status-late { background: #ef4444; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+  
+  .chart-bar {
+    background: linear-gradient(to top, #3b82f6, #8b5cf6);
+    border-radius: 4px 4px 0 0;
+    min-height: 4px;
+    transition: all 0.3s ease;
+  }
+  
+  .chart-bar:hover {
+    opacity: 0.8;
+  }
+</style>
+
+<script>
+// Attendance functionality
+var attendanceRecords = [];
+var currentUser = {{ current_user | tojson }};
+
+// DOM elements
+var clockInBtn = document.getElementById('clockIn');
+var clockOutBtn = document.getElementById('clockOut');
+var markBreakBtn = document.getElementById('markBreak');
+var endBreakBtn = document.getElementById('endBreak');
+var refreshBtn = document.getElementById('refreshAttendance');
+var statusText = document.getElementById('statusText');
+var statusTime = document.getElementById('statusTime');
+var dateRange = document.getElementById('dateRange');
+var customDateRange = document.getElementById('customDateRange');
+var attendanceTableBody = document.getElementById('attendanceTableBody');
+
+// Stats elements
+var todayHours = document.getElementById('todayHours');
+var todayBreaks = document.getElementById('todayBreaks');
+var todayOvertime = document.getElementById('todayOvertime');
+var todayEarnings = document.getElementById('todayEarnings');
+
+function loadAttendanceStatus() {
+  fetch('/api/attendance/status')
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      updateStatusDisplay(data.status);
+    } else {
+      statusText.textContent = 'Error loading status';
+    }
+  })
+  .catch(error => {
+    statusText.textContent = 'Network error';
+    console.error('Error loading status:', error);
+  });
+}
+
+function updateStatusDisplay(status) {
+  statusText.textContent = status.current_status || 'Clocked Out';
+  
+  if (status.last_action_time) {
+    var time = new Date(status.last_action_time).toLocaleTimeString();
+    statusTime.textContent = `Since ${time}`;
+  } else {
+    statusTime.textContent = '';
+  }
+  
+  // Update button states
+  clockInBtn.disabled = status.current_status === 'in';
+  clockOutBtn.disabled = status.current_status === 'out';
+  markBreakBtn.disabled = status.current_status !== 'in';
+  endBreakBtn.disabled = status.current_status !== 'break';
+}
+
+function clockIn() {
+  performAttendanceAction('clock_in', '🕐 Clocking in...');
+}
+
+function clockOut() {
+  performAttendanceAction('clock_out', '🕐 Clocking out...');
+}
+
+function markBreak() {
+  performAttendanceAction('start_break', '☕ Starting break...');
+}
+
+function endBreak() {
+  performAttendanceAction('end_break', '🔙 Ending break...');
+}
+
+function performAttendanceAction(action, loadingText) {
+  var originalText = event.target.textContent;
+  event.target.textContent = loadingText;
+  event.target.disabled = true;
+  
+  fetch('/api/attendance/action', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ action: action })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      showNotification(`${action.replace('_', ' ')} successful!`, 'success');
+      loadAttendanceStatus();
+      loadAttendanceRecords();
+    } else {
+      showNotification(`Failed to ${action.replace('_', ' ')}: ${data.error}`, 'error');
+    }
+  })
+  .catch(error => {
+    showNotification(`Error: ${error.message}`, 'error');
+  })
+  .finally(() => {
+    event.target.textContent = originalText;
+    event.target.disabled = false;
+  });
+}
+
+function loadAttendanceRecords() {
+  var range = dateRange.value;
+  var url = `/api/attendance/records?range=${range}`;
+  
+  if (range === 'custom') {
+    var startDate = document.getElementById('startDate').value;
+    var endDate = document.getElementById('endDate').value;
+    if (startDate && endDate) {
+      url += `&start_date=${startDate}&end_date=${endDate}`;
+    }
+  }
+  
+  fetch(url)
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      attendanceRecords = data.records;
+      renderAttendanceTable();
+      updateTodaysSummary();
+      updateWeeklyChart();
+    } else {
+      showNotification('Failed to load attendance records', 'error');
+    }
+  })
+  .catch(error => {
+    showNotification('Error loading records: ' + error.message, 'error');
+  });
+}
+
+function renderAttendanceTable() {
+  var html = '';
+  
+  attendanceRecords.forEach(function(record) {
+    var date = new Date(record.date).toLocaleDateString();
+    var clockIn = record.clock_in ? new Date(record.clock_in).toLocaleTimeString() : '-';
+    var clockOut = record.clock_out ? new Date(record.clock_out).toLocaleTimeString() : '-';
+    var breakTime = record.break_time || '0:00';
+    var totalHours = record.total_hours || '0.0';
+    var overtime = record.overtime_hours || '0.0';
+    var status = record.status || 'unknown';
+    
+    html += `
+      <tr class="hover:bg-white/5">
+        <td class="p-3 border-t border-white/10">${date}</td>
+        <td class="p-3 border-t border-white/10">${clockIn}</td>
+        <td class="p-3 border-t border-white/10">${clockOut}</td>
+        <td class="p-3 border-t border-white/10">${breakTime}</td>
+        <td class="p-3 border-t border-white/10">${totalHours}h</td>
+        <td class="p-3 border-t border-white/10">${overtime}h</td>
+        <td class="p-3 border-t border-white/10"><span class="status-${status}">${status}</span></td>
+      </tr>
+    `;
+  });
+  
+  attendanceTableBody.innerHTML = html;
+}
+
+function updateTodaysSummary() {
+  var today = new Date().toDateString();
+  var todayRecord = attendanceRecords.find(r => 
+    new Date(r.date).toDateString() === today
+  );
+  
+  if (todayRecord) {
+    todayHours.textContent = todayRecord.total_hours || '0.0';
+    todayBreaks.textContent = todayRecord.breaks_count || '0';
+    todayOvertime.textContent = todayRecord.overtime_hours || '0.0';
+    todayEarnings.textContent = '$' + (todayRecord.earnings || '0');
+  } else {
+    todayHours.textContent = '0.0';
+    todayBreaks.textContent = '0';
+    todayOvertime.textContent = '0.0';
+    todayEarnings.textContent = '$0';
+  }
+}
+
+function updateWeeklyChart() {
+  var weeklyChart = document.getElementById('weeklyChart');
+  var days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  var maxHours = 12; // Maximum hours for scaling
+  
+  // Get last 7 days data
+  var chartData = days.map(function(day, index) {
+    var date = new Date();
+    date.setDate(date.getDate() - (6 - index));
+    var record = attendanceRecords.find(r => 
+      new Date(r.date).toDateString() === date.toDateString()
+    );
+    return {
+      day: day,
+      hours: record ? parseFloat(record.total_hours) || 0 : 0
+    };
+  });
+  
+  var html = '';
+  chartData.forEach(function(data) {
+    var height = (data.hours / maxHours) * 100;
+    html += `
+      <div class="flex flex-col items-center gap-2 flex-1">
+        <div class="chart-bar w-full" style="height: ${height}%" title="${data.hours} hours"></div>
+        <div class="text-xs text-white/60">${data.day}</div>
+        <div class="text-xs font-medium">${data.hours}h</div>
+      </div>
+    `;
+  });
+  
+  weeklyChart.innerHTML = html;
+}
+
+function showNotification(message, type = 'info') {
+  var notification = document.createElement('div');
+  notification.className = `fixed top-4 right-4 z-50 p-4 rounded-xl border max-w-md shadow-lg transition-all duration-300 transform translate-x-full`;
+  
+  if (type === 'success') {
+    notification.className += ' bg-green-500/20 border-green-500/30 text-green-200';
+  } else if (type === 'error') {
+    notification.className += ' bg-red-500/20 border-red-500/30 text-red-200';
+  } else {
+    notification.className += ' bg-blue-500/20 border-blue-500/30 text-blue-200';
+  }
+  
+  notification.innerHTML = `
+    <div class="flex items-center gap-3">
+      <div class="text-xl">${type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️'}</div>
+      <div class="flex-1">${message}</div>
+      <button onclick="this.parentElement.parentElement.remove()" class="text-white/70 hover:text-white">✕</button>
+    </div>
+  `;
+  
+  document.body.appendChild(notification);
+  
+  setTimeout(() => {
+    notification.classList.remove('translate-x-full');
+  }, 100);
+  
+  setTimeout(() => {
+    notification.classList.add('translate-x-full');
+    setTimeout(() => notification.remove(), 300);
+  }, 5000);
+}
+
+// Event listeners
+clockInBtn.addEventListener('click', clockIn);
+clockOutBtn.addEventListener('click', clockOut);
+markBreakBtn.addEventListener('click', markBreak);
+endBreakBtn.addEventListener('click', endBreak);
+refreshBtn.addEventListener('click', function() {
+  loadAttendanceStatus();
+  loadAttendanceRecords();
+});
+
+dateRange.addEventListener('change', function() {
+  if (this.value === 'custom') {
+    customDateRange.classList.remove('hidden');
+  } else {
+    customDateRange.classList.add('hidden');
+    loadAttendanceRecords();
+  }
+});
+
+document.getElementById('applyDateRange').addEventListener('click', loadAttendanceRecords);
+
+// Load data on page load
+document.addEventListener('DOMContentLoaded', function() {
+  loadAttendanceStatus();
+  loadAttendanceRecords();
+  
+  // Update status every 30 seconds
+  setInterval(loadAttendanceStatus, 30000);
+});
+</script>
+
+{% endblock %}

@@ -1,0 +1,210 @@
+{% extends "layout_base.html" %}
+{% block content %}
+
+<!-- Personalized Greeting Section -->
+<section class="mt-8 mb-6">
+  <div class="glass p-6 text-center max-w-2xl mx-auto">
+    <div class="text-2xl font-bold text-transparent bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text mb-2">
+      {{ time_greeting }}, {{ first_name }}! 👋
+    </div>
+    <p class="text-white/80 text-lg">{{ day_message }}</p>
+    <p class="text-sm text-white/60 mt-2">Welcome back to your dashboard</p>
+  </div>
+</section>
+
+<!-- Dashboard Overview Section -->
+<section class="mb-8">
+  <h2 class="text-2xl font-bold mb-6">Dashboard Overview</h2>
+  
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+    <!-- Orders Today -->
+    <div class="glass p-6 text-center transform hover:scale-105 transition-all duration-300">
+      <div class="text-3xl font-bold text-yellow-400 mb-2">{{ stats.orders_today }}</div>
+      <div class="text-sm text-white/70">Orders Today</div>
+      <div class="text-xs text-yellow-400 mt-1">⚠️ Setup Required</div>
+    </div>
+    
+    <!-- Active Employees -->
+    <div class="glass p-6 text-center transform hover:scale-105 transition-all duration-300">
+      <div class="text-3xl font-bold text-green-400 mb-2">{{ stats.active_employees }}</div>
+      <div class="text-sm text-white/70">Active Employees</div>
+    </div>
+    
+    <!-- Pending Orders -->
+    <div class="glass p-6 text-center transform hover:scale-105 transition-all duration-300">
+      <div class="text-3xl font-bold text-orange-400 mb-2">{{ stats.pending_orders }}</div>
+      <div class="text-sm text-white/70">Pending Orders</div>
+    </div>
+    
+    <!-- Orders This Week -->
+    <div class="glass p-6 text-center transform hover:scale-105 transition-all duration-300">
+      <div class="text-3xl font-bold text-purple-400 mb-2">{{ stats.orders_this_week }}</div>
+      <div class="text-sm text-white/70">Orders This Week</div>
+    </div>
+  </div>
+
+  <!-- Revenue Cards -->
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+    <!-- Today's Revenue -->
+    <div class="glass p-6 text-center transform hover:scale-105 transition-all duration-300">
+      <div class="text-2xl font-bold text-green-400 mb-2">USD {{ stats.todays_revenue }}</div>
+      <div class="text-sm text-white/70">Today's Revenue</div>
+    </div>
+    
+    <!-- Total Revenue -->
+    <div class="glass p-6 text-center transform hover:scale-105 transition-all duration-300">
+      <div class="text-2xl font-bold text-blue-400 mb-2">USD {{ stats.total_revenue }}</div>
+      <div class="text-sm text-white/70">Total Revenue</div>
+    </div>
+    
+    <!-- Fulfilled Orders -->
+    <div class="glass p-6 text-center transform hover:scale-105 transition-all duration-300">
+      <div class="text-2xl font-bold text-purple-400 mb-2">{{ stats.fulfilled_orders }}</div>
+      <div class="text-sm text-white/70">Fulfilled Orders</div>
+    </div>
+  </div>
+</section>
+
+<!-- Quick Tools Section -->
+<section class="mb-8">
+  <h2 class="text-xl font-bold mb-4">Quick Tools</h2>
+  
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <!-- Employee Lookup -->
+    <div class="glass p-6">
+      <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+        <span class="text-blue-400">👤</span>
+        Employee Lookup
+      </h3>
+      <div class="flex gap-2">
+        <input type="text" 
+               placeholder="Search employee..." 
+               class="flex-1 bg-white/10 rounded px-3 py-2 text-white placeholder-white/50 border border-white/20 focus:border-purple-400 outline-none">
+        <button class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded transition-colors">
+          Search
+        </button>
+      </div>
+    </div>
+    
+    <!-- Search Orders -->
+    <div class="glass p-6">
+      <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+        <span class="text-green-400">🔍</span>
+        Search Orders
+      </h3>
+      <div class="flex gap-2">
+        <input type="text" 
+               placeholder="Order ID..." 
+               class="flex-1 bg-white/10 rounded px-3 py-2 text-white placeholder-white/50 border border-white/20 focus:border-purple-400 outline-none">
+        <button class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded transition-colors">
+          Search
+        </button>
+      </div>
+      <p class="text-xs text-white/60 mt-2">Feature coming soon...</p>
+    </div>
+    
+    <!-- Quick Export -->
+    <div class="glass p-6">
+      <h3 class="text-lg font-semibold mb-4 flex items-center gap-2">
+        <span class="text-orange-400">📤</span>
+        Quick Export
+      </h3>
+      <div class="flex gap-2">
+        <select class="flex-1 bg-white/10 rounded px-3 py-2 text-white border border-white/20 focus:border-purple-400 outline-none">
+          <option value="attendance">Attendance Data</option>
+          <option value="orders">Orders Data</option>
+          <option value="reports">Reports</option>
+        </select>
+        <button class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded transition-colors">
+          Export
+        </button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Team Chat Widget -->
+<section class="mb-8">
+  <div class="glass p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-xl font-bold flex items-center gap-2">
+        <span class="text-purple-400">💬</span>
+        Team Chat
+      </h3>
+      <button class="text-purple-400 hover:text-purple-300 transition-colors">
+        <span class="float-right">
+          <a href="/chat" class="text-purple-400 hover:text-purple-300">View All →</a>
+        </span>
+      </button>
+    </div>
+    
+    <!-- Quick Chat Messages -->
+    <div id="dashboardChat" class="space-y-3 max-h-48 overflow-y-auto mb-4">
+      <!-- Messages will be loaded here -->
+    </div>
+    
+    <!-- Quick Message Input -->
+    <div class="flex gap-2">
+      <input type="text" 
+             id="quickChatMessage" 
+             placeholder="Send a quick message..." 
+             class="flex-1 bg-white/10 rounded px-3 py-2 text-white placeholder-white/50 border border-white/20 focus:border-purple-400 outline-none">
+      <button onclick="sendQuickMessage()" 
+              class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded transition-colors">
+        Send
+      </button>
+    </div>
+  </div>
+</section>
+
+<script>
+// Quick message functionality
+function sendQuickMessage() {
+    const input = document.getElementById('quickChatMessage');
+    const message = input.value.trim();
+    if (!message) return;
+    
+    // Here you would send the message to your chat API
+    console.log('Sending message:', message);
+    
+    // Clear input
+    input.value = '';
+    
+    // For now, just show a confirmation
+    alert('Message sent! (This is a demo)');
+}
+
+// Load recent chat messages for dashboard
+function loadDashboardChat() {
+    // This would load recent messages from your chat API
+    const chatContainer = document.getElementById('dashboardChat');
+    chatContainer.innerHTML = `
+        <div class="text-sm text-white/60 p-2 bg-white/5 rounded">
+            <span class="font-semibold text-blue-400">John:</span> All orders are processed for today! 👍
+        </div>
+        <div class="text-sm text-white/60 p-2 bg-white/5 rounded">
+            <span class="font-semibold text-green-400">Sarah:</span> Inventory update completed.
+        </div>
+        <div class="text-sm text-white/60 p-2 bg-white/5 rounded">
+            <span class="font-semibold text-purple-400">Mike:</span> Ready for tomorrow's batch!
+        </div>
+    `;
+}
+
+// Quick message on Enter key
+document.addEventListener('DOMContentLoaded', function() {
+    const chatInput = document.getElementById('quickChatMessage');
+    if (chatInput) {
+        chatInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendQuickMessage();
+            }
+        });
+    }
+    
+    // Load chat messages
+    loadDashboardChat();
+});
+</script>
+
+{% endblock %}

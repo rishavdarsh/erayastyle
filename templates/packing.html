@@ -1,0 +1,374 @@
+{% extends "layout_base.html" %}
+{% block content %}
+
+<style>
+  /* Override the main content max-width for packing page */
+  .main-content > div {
+    max-width: none !important;
+    width: 100% !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }
+</style>
+
+<section class="glass p-2 lg:p-4" style="width: 100%; max-width: none; margin: 0;">
+  <h1 class="text-3xl font-bold text-white">Order Packing Management</h1>
+  <p class="text-white/80 mt-2">Upload Organized Orders CSV/XLSX and preview as a table.</p>
+  
+  <!-- File Upload and Actions -->
+  <div class="mt-6 glass p-5 rounded-xl">
+    <div class="flex flex-wrap items-center gap-3">
+      <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" class="hidden">
+      <button type="button" id="chooseFileBtn" class="btn btn-secondary">Choose File</button>
+      <span id="fileName" class="text-white/70 px-3 py-2 bg-slate-800/50 rounded-lg">No file selected</span>
+      <button type="button" id="previewBtn" class="btn btn-primary" disabled>Preview</button>
+      <button type="button" id="exportBtn" class="btn btn-secondary" disabled>Export CSV (filtered)</button>
+      <button type="button" id="bulkActionBtn" class="btn btn-secondary" disabled>Bulk Actions</button>
+      <button type="button" onclick="packingManager.testModal()" class="btn btn-secondary">Test Modal</button>
+      <div id="status" class="text-white/70 ml-auto">Waiting for file...</div>
+    </div>
+  </div>
+
+  <!-- Filters Row -->
+  <div class="mt-4 glass p-5 rounded-xl">
+    <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+      <input id="searchOrder" placeholder="Search Order #" class="input-field">
+      <input id="searchProduct" placeholder="Search Product" class="input-field">
+      <input id="searchVariant" placeholder="Search Variant" class="input-field">
+      <select id="filterStatus" class="input-field">
+        <option value="">All Statuses</option>
+        <option value="Missing Photo">Missing Photo</option>
+        <option value="Missing Polaroid">Missing Polaroid</option>
+        <option value="OK">OK</option>
+      </select>
+      <select id="filterSku" class="input-field">
+        <option value="">All SKUs</option>
+      </select>
+      <select id="filterVariant" class="input-field">
+        <option value="">All Variants</option>
+      </select>
+      <select id="filterPacker" class="input-field">
+        <option value="">All Packers</option>
+      </select>
+    </div>
+    <div class="mt-3 flex items-center gap-3">
+      <span class="text-white/70 text-sm">Page size:</span>
+      <select id="pageSize" class="input-field w-20">
+        <option value="25">25</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+        <option value="500">500</option>
+        <option value="1000" selected>1000</option>
+      </select>
+      <span id="rowCount" class="text-white/70 text-sm ml-auto"></span>
+    </div>
+  </div>
+
+  <!-- Warning Banner (shown when columns not detected) -->
+  <div id="warningBanner" class="hidden mt-4 glass p-4 rounded-xl border-l-4 border-yellow-500 bg-yellow-500/10">
+    <div class="flex items-center gap-2">
+      <span class="text-yellow-400">⚠️</span>
+      <span class="text-yellow-200">Some expected columns weren't detected. The table will show all available columns.</span>
+    </div>
+  </div>
+
+  <!-- Data Table -->
+  <div class="mt-4 glass p-0 rounded-xl overflow-x-auto overflow-y-auto" style="max-height: 75vh; width: 100%; margin-left: -1rem; margin-right: -1rem; padding-left: 1rem; padding-right: 1rem;">
+    <table class="w-full text-sm table-auto" id="packingTable" style="min-width: 1400px; width: 100%;">
+      <thead class="sticky top-0 bg-slate-900/80 backdrop-blur z-10" id="tableHead"></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  <div class="mt-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <button id="prevPage" class="btn btn-secondary" disabled>Previous</button>
+      <span id="pageInfo" class="text-white/70 text-sm">Page 1 of 1</span>
+      <button id="nextPage" class="btn btn-secondary" disabled>Next</button>
+    </div>
+    <div id="paginationInfo" class="text-white/70 text-sm"></div>
+  </div>
+</section>
+
+<style>
+  .input-field {
+    @apply rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-sm text-white placeholder-white/50 focus:outline-none focus:border-blue-500;
+  }
+  
+  .btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  
+  .btn-primary {
+    @apply bg-blue-600 hover:bg-blue-700 text-white;
+  }
+  
+  .btn-secondary {
+    @apply bg-slate-700 hover:bg-slate-600 text-white;
+  }
+  
+  .btn:disabled {
+    @apply opacity-50 cursor-not-allowed;
+  }
+  
+  #packingTable th, #packingTable td {
+    @apply p-3 text-left align-top border-b border-white/10;
+    min-height: 100px;
+    vertical-align: middle;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  
+  #packingTable thead th {
+    @apply bg-slate-900/80 text-white font-medium sticky top-0;
+    z-index: 20;
+  }
+  
+  /* Specific column widths for better layout */
+  #packingTable th:nth-child(1), #packingTable td:nth-child(1) { /* Checkbox */
+    width: 40px;
+    min-width: 40px;
+    max-width: 40px;
+  }
+  
+  #packingTable th:nth-child(2), #packingTable td:nth-child(2) { /* Order Number */
+    width: 140px;
+    min-width: 140px;
+  }
+  
+  #packingTable th:nth-child(3), #packingTable td:nth-child(3) { /* Product Name */
+    width: 350px;
+    min-width: 300px;
+    white-space: normal;
+    word-wrap: break-word;
+  }
+  
+  #packingTable th:nth-child(4), #packingTable td:nth-child(4) { /* Variant */
+    width: 120px;
+    min-width: 100px;
+  }
+  
+  #packingTable th:nth-child(6), #packingTable td:nth-child(6) { /* Main Photo */
+    width: 80px;
+    min-width: 80px;
+  }
+  
+  #packingTable th:nth-child(7), #packingTable td:nth-child(7) { /* Polaroid */
+    width: 100px;
+    min-width: 100px;
+  }
+  
+  #packingTable th:nth-child(9), #packingTable td:nth-child(9) { /* Back Engraving Value */
+    width: 250px;
+    min-width: 200px;
+    white-space: normal;
+    word-wrap: break-word;
+  }
+  
+  #packingTable th:last-child, #packingTable td:last-child { /* Status dropdown */
+    width: 120px;
+    min-width: 120px;
+  }
+  
+  /* Text wrapping for specific cells */
+  .text-wrapping-cell {
+    white-space: normal !important;
+    word-wrap: break-word !important;
+    max-width: 300px;
+    line-height: 1.4;
+  }
+  
+  /* Horizontal scroll improvements */
+  #packingTable {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+  
+  #packingTable tbody tr:nth-child(even) {
+    @apply bg-white/5;
+  }
+  
+  #packingTable tbody tr:hover {
+    @apply bg-white/10;
+  }
+  
+  .status-dropdown {
+    @apply rounded-lg bg-slate-800/60 border border-white/10 px-2 py-1 text-sm text-white focus:outline-none focus:border-blue-500;
+  }
+  
+  /* Status badge styles */
+  .status-badge {
+    @apply px-2 py-1 rounded-full text-xs font-medium;
+  }
+  
+  .status-missing {
+    @apply bg-red-500/20 text-red-300 border border-red-500/30;
+  }
+  
+  .status-ok {
+    @apply bg-green-500/20 text-green-300 border border-green-500/30;
+  }
+  
+  .status-warning {
+    @apply bg-yellow-500/20 text-yellow-300 border border-yellow-500/30;
+  }
+  
+  .photo-thumbnail {
+    @apply max-h-16 max-w-16 object-cover rounded border border-white/20;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    position: relative;
+  }
+  
+  .photo-thumbnail:hover {
+    @apply border-blue-400 scale-110 shadow-xl;
+    transform: scale(1.1) translateY(-2px);
+    box-shadow: 0 8px 25px rgba(59, 130, 246, 0.4);
+  }
+  
+  .photo-thumbnail:hover::after {
+    content: "🔍";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 0, 0, 0.7);
+    color: white;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+  }
+  
+  .sortable-header {
+    @apply bg-slate-700/50 hover:bg-slate-600/50 transition-colors;
+    user-select: none;
+  }
+  
+  .sortable-header:hover {
+    @apply text-blue-300;
+  }
+  
+  .checkbox-cell {
+    @apply w-8 text-center;
+  }
+  
+  .checkbox-cell input[type="checkbox"] {
+    @apply w-4 h-4 text-blue-600 bg-transparent border-white/30 rounded focus:ring-blue-500;
+  }
+  
+  /* Image grid styles for multiple photos */
+  .image-grid {
+    @apply flex flex-wrap items-start gap-1;
+  }
+  
+  .image-grid img {
+    @apply transition-all duration-200 hover:scale-105 hover:shadow-lg;
+  }
+  
+  .image-grid img:hover {
+    @apply border-blue-400 border-2;
+  }
+  
+  /* Enhanced Image Modal */
+  .image-modal {
+    animation: modalFadeIn 0.3s ease-out;
+  }
+  
+  .image-modal-content {
+    animation: modalSlideIn 0.3s ease-out;
+    max-width: 70vw;
+    max-height: 70vh;
+  }
+  
+  @keyframes modalFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  
+  @keyframes modalSlideIn {
+    from { transform: scale(0.9) translateY(-20px); opacity: 0; }
+    to { transform: scale(1) translateY(0); opacity: 1; }
+  }
+  
+  .copy-button {
+    @apply bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-md transition-all duration-200 text-sm;
+    cursor: pointer;
+  }
+  
+  .copy-button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+  }
+  
+  .toast-notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: #10b981;
+    color: white;
+    padding: 12px 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    z-index: 9999;
+    animation: toastSlideIn 0.3s ease-out;
+  }
+  
+  @keyframes toastSlideIn {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  
+  @keyframes toastSlideOut {
+    from { transform: translateX(0); opacity: 1; }
+    to { transform: translateX(100%); opacity: 0; }
+  }
+  
+  .back-message-text {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 12px;
+    color: #e2e8f0;
+    line-height: 1.5;
+    user-select: text;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  
+  /* Responsive image grid */
+  @media (max-width: 768px) {
+    .image-grid img {
+      max-width: 80px !important;
+      max-height: 80px !important;
+    }
+    
+    #packingTable th, #packingTable td {
+      padding: 8px !important;
+      min-height: 100px !important;
+    }
+    
+    .image-modal-content {
+      max-width: 95vw;
+      max-height: 80vh;
+      margin: 1rem;
+    }
+  }
+</style>
+
+<script>
+// Global function for select all functionality
+function toggleSelectAll(checkbox) {
+    const rowCheckboxes = document.querySelectorAll('.row-checkbox');
+    rowCheckboxes.forEach(cb => {
+        cb.checked = checkbox.checked;
+    });
+}
+</script>
+
+<script src="/static/js/packing.js"></script>
+
+{% endblock %}

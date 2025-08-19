@@ -1,0 +1,326 @@
+{% extends "layout_base.html" %}
+
+{% block content %}
+<section class="glass p-6">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold">User Management</h1>
+            <p class="text-white/80 mt-2">Manage system users, roles, and permissions</p>
+        </div>
+        <button id="addUserBtn" class="btn btn-primary flex items-center gap-2">
+            <span>➕</span>
+            Add User
+        </button>
+    </div>
+
+    <div class="grid gap-6">
+        <!-- User Statistics -->
+        <div class="glass p-5">
+            <h2 class="text-xl font-semibold mb-4">User Statistics</h2>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div class="bg-slate-800/50 p-4 rounded-lg text-center">
+                    <div class="text-2xl font-bold text-blue-400" id="totalUsers">0</div>
+                    <div class="text-sm text-white/60">Total Users</div>
+                </div>
+                <div class="bg-slate-800/50 p-4 rounded-lg text-center">
+                    <div class="text-2xl font-bold text-green-400" id="activeUsers">0</div>
+                    <div class="text-sm text-white/60">Active Users</div>
+                </div>
+                <div class="bg-slate-800/50 p-4 rounded-lg text-center">
+                    <div class="text-2xl font-bold text-purple-400" id="adminUsers">0</div>
+                    <div class="text-sm text-white/60">Admins</div>
+                </div>
+                <div class="bg-slate-800/50 p-4 rounded-lg text-center">
+                    <div class="text-2xl font-bold text-orange-400" id="recentLogins">0</div>
+                    <div class="text-sm text-white/60">Recent Logins</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filters and Controls -->
+        <div class="glass p-5">
+            <h2 class="text-xl font-semibold mb-4">Search & Filters</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+                <!-- Search -->
+                <div class="lg:col-span-2">
+                    <label class="block text-sm font-medium mb-2">Search</label>
+                    <input type="text" id="searchInput" placeholder="Search by name, email, phone..." 
+                           class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white placeholder-white/50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                </div>
+
+                <!-- Role Filter -->
+                <div>
+                    <label class="block text-sm font-medium mb-2">Role</label>
+                    <select id="roleFilter" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="all">All Roles</option>
+                        <option value="owner">Owner</option>
+                        <option value="admin">Admin</option>
+                        <option value="manager">Manager</option>
+                        <option value="employee">Employee</option>
+                        <option value="packer">Packer</option>
+                    </select>
+                </div>
+
+                <!-- Status Filter -->
+                <div>
+                    <label class="block text-sm font-medium mb-2">Status</label>
+                    <select id="statusFilter" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="all">All Status</option>
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive</option>
+                        <option value="suspended">Suspended</option>
+                    </select>
+                </div>
+
+                <!-- Sort -->
+                <div>
+                    <label class="block text-sm font-medium mb-2">Sort By</label>
+                    <select id="sortSelect" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="created_at">Date Created</option>
+                        <option value="name">Name</option>
+                        <option value="email">Email</option>
+                        <option value="role">Role</option>
+                        <option value="status">Status</option>
+                        <option value="last_login">Last Login</option>
+                    </select>
+                </div>
+
+                <!-- Page Size -->
+                <div>
+                    <label class="block text-sm font-medium mb-2">Per Page</label>
+                    <select id="limitSelect" class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="10">10</option>
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Users Table -->
+        <div class="glass p-5">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold">Users</h2>
+                <button id="refreshBtn" class="btn btn-secondary mr-2">🔄 Refresh</button>
+                <button id="forceRefreshBtn" class="btn btn-warning mr-2">🔄 Force Refresh</button>
+                <button id="hardRefreshBtn" class="btn btn-danger">🔄 Hard Refresh</button>
+                <span id="lastRefreshTime" class="text-sm text-gray-400 ml-4">Last refreshed: Never</span>
+                <span id="dataAge" class="text-sm text-orange-400 ml-4 hidden">⚠️ Data may be stale</span>
+            </div>
+
+            <div class="overflow-auto">
+                <table class="w-full rounded-lg overflow-hidden">
+                    <thead class="bg-slate-900/80">
+                        <tr>
+                            <th class="text-left p-3 border-b border-white/10">Name</th>
+                            <th class="text-left p-3 border-b border-white/10">Email</th>
+                            <th class="text-left p-3 border-b border-white/10">Role</th>
+                            <th class="text-left p-3 border-b border-white/10">Status</th>
+                            <th class="text-left p-3 border-b border-white/10">Phone</th>
+                            <th class="text-left p-3 border-b border-white/10">City</th>
+                            <th class="text-left p-3 border-b border-white/10">Joined</th>
+                            <th class="text-left p-3 border-b border-white/10">Last Login</th>
+                            <th class="text-left p-3 border-b border-white/10">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="usersTableBody" class="bg-slate-900/20">
+                        <!-- Users will be loaded here -->
+                    </tbody>
+                </table>
+
+                <!-- Loading state -->
+                <div id="loadingState" class="flex items-center justify-center py-8 text-white">
+                    <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-400"></div>
+                    <span class="ml-2">Loading users...</span>
+                </div>
+
+                <!-- Empty state -->
+                <div id="emptyState" class="hidden text-center py-8 text-white/60">
+                    <div class="text-4xl mb-2">👥</div>
+                    <p>No users found</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pagination -->
+        <div id="paginationContainer" class="glass p-4">
+            <div class="flex items-center justify-between">
+                <div class="text-sm text-white/80">
+                    Showing <span id="resultsInfo">0-0 of 0</span> users
+                </div>
+                <div class="flex items-center gap-2">
+                    <button id="prevBtn" class="btn btn-secondary disabled:opacity-50 disabled:cursor-not-allowed">
+                        Previous
+                    </button>
+                    <span id="pageInfo" class="px-3 py-2 text-sm text-white/80">Page 1 of 1</span>
+                    <button id="nextBtn" class="btn btn-secondary disabled:opacity-50 disabled:cursor-not-allowed">
+                        Next
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Add/Edit User Modal -->
+<div id="userModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="glass p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
+        <div class="flex justify-between items-center mb-4">
+            <h2 id="modalTitle" class="text-xl font-bold">Add User</h2>
+            <button id="closeModalBtn" class="text-white/60 hover:text-white text-2xl">×</button>
+        </div>
+
+        <form id="userForm">
+            <input type="hidden" id="userId" name="user_id">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <div class="grid grid-cols-1 gap-4">
+                <!-- Name -->
+                <div>
+                    <label class="block text-sm font-medium mb-2">Name *</label>
+                    <input type="text" id="userName" name="name" required 
+                           class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white placeholder-white/50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                </div>
+
+                <!-- Email -->
+                <div>
+                    <label class="block text-sm font-medium mb-2">Email *</label>
+                    <input type="email" id="userEmail" name="email" required 
+                           class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white placeholder-white/50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                    <div id="emailError" class="hidden text-red-400 text-sm mt-1"></div>
+                </div>
+
+                <!-- Password -->
+                <div>
+                    <label class="block text-sm font-medium mb-2">
+                        Password <span id="passwordRequired">*</span>
+                    </label>
+                    <input type="password" id="userPassword" name="password" 
+                           class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white placeholder-white/50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                    <div id="passwordNote" class="hidden text-white/60 text-sm mt-1">Leave empty to keep current password</div>
+                </div>
+
+                <!-- Confirm Password -->
+                <div>
+                    <label class="block text-sm font-medium mb-2">
+                        Confirm Password <span id="confirmRequired">*</span>
+                    </label>
+                    <input type="password" id="userPasswordConfirm" name="password_confirm" 
+                           class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white placeholder-white/50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                    <div id="passwordError" class="hidden text-red-400 text-sm mt-1"></div>
+                </div>
+
+                <!-- Role -->
+                <div>
+                    <label class="block text-sm font-medium mb-2">Role *</label>
+                    <select id="userRole" name="role" required 
+                            class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="employee">Employee</option>
+                        <option value="packer">Packer</option>
+                        <option value="manager">Manager</option>
+                        <option value="admin">Admin</option>
+                        <option value="owner">Owner</option>
+                    </select>
+                </div>
+
+                <!-- Status -->
+                <div>
+                    <label class="block text-sm font-medium mb-2">Status *</label>
+                    <select id="userStatus" name="status" required 
+                            class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive</option>
+                        <option value="suspended">Suspended</option>
+                    </select>
+                </div>
+
+                <!-- Phone -->
+                <div>
+                    <label class="block text-sm font-medium mb-2">Phone</label>
+                    <input type="tel" id="userPhone" name="phone" 
+                           class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white placeholder-white/50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                </div>
+
+                <!-- City -->
+                <div>
+                    <label class="block text-sm font-medium mb-2">City</label>
+                    <input type="text" id="userCity" name="city" 
+                           class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white placeholder-white/50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                </div>
+
+                <!-- State -->
+                <div>
+                    <label class="block text-sm font-medium mb-2">State</label>
+                    <input type="text" id="userState" name="state" 
+                           class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white placeholder-white/50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                </div>
+
+                <!-- Joining Date -->
+                <div>
+                    <label class="block text-sm font-medium mb-2">Joining Date</label>
+                    <input type="date" id="userJoiningDate" name="joining_date" 
+                           class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                </div>
+            </div>
+
+            <div class="flex gap-3 mt-6 pt-4 border-t border-white/10">
+                <button type="submit" id="saveBtn" class="btn btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed">
+                    Save User
+                </button>
+                <button type="button" id="cancelBtn" class="btn btn-secondary">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div id="deleteModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="glass p-6 max-w-md w-full">
+        <div class="flex items-center mb-4">
+            <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-500/20">
+                <span class="text-red-400 text-xl">⚠️</span>
+            </div>
+        </div>
+        <div class="text-center">
+            <h3 class="text-lg font-medium mb-2">Delete User</h3>
+            <p class="text-sm text-white/60 mb-4">
+                Are you sure you want to delete <span id="deleteUserName" class="font-medium text-white"></span>? 
+                This action cannot be undone.
+            </p>
+        </div>
+        <form id="deleteForm">
+            <input type="hidden" id="deleteUserId" name="user_id">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            
+            <div class="flex gap-3">
+                <button type="submit" class="btn bg-red-600 hover:bg-red-700 text-white flex-1">
+                    Delete User
+                </button>
+                <button type="button" id="cancelDeleteBtn" class="btn btn-secondary">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Toast Notifications -->
+<div id="toastContainer" class="fixed top-4 right-4 z-50 space-y-2"></div>
+
+<style>
+.role-owner { background: #7c3aed; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+.role-admin { background: #dc2626; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+.role-manager { background: #2563eb; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+.role-employee { background: #16a34a; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+.role-packer { background: #ea580c; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+
+.status-active { background: #10b981; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+.status-inactive { background: #6b7280; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+.status-suspended { background: #ef4444; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+</style>
+
+<script src="/static/js/admin_users.js"></script>
+
+
+
+{% endblock %}

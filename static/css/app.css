@@ -1,0 +1,200 @@
+/* Exact sidebar styles from /hub */
+:root {
+    --sidebar-width: 280px;
+    --sidebar-collapsed-width: 80px;
+}
+
+/* Main Layout */
+.main-content {
+    margin-left: var(--sidebar-width);
+    transition: margin-left 0.3s ease;
+    min-height: 100vh;
+    background: linear-gradient(135deg, #0f172a, #1e1b4b);
+    padding: 1.5rem;
+}
+
+/* Sidebar Base */
+.sidebar {
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    height: 100vh;
+    position: fixed;
+    left: 0;
+    top: 0;
+    background: rgba(17, 24, 39, 0.7);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    flex-direction: column;
+    z-index: 30;
+    transition: all 0.3s ease;
+}
+
+/* Sidebar Header */
+.sidebar-header {
+    padding: 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sidebar-title {
+    font-weight: 600;
+    color: white;
+}
+
+.sidebar-subtitle {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.access-badge {
+    background: rgba(239, 68, 68, 0.2);
+    color: rgb(252, 165, 165);
+    padding: 2px 6px;
+    border-radius: 9999px;
+    font-size: 0.625rem;
+}
+
+/* Navigation Items */
+.sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.625rem 1rem;
+    color: rgba(255, 255, 255, 0.7);
+    transition: all 0.2s ease;
+    text-decoration: none;
+    position: relative;
+    margin: 2px 0.5rem;
+    border-radius: 0.5rem;
+}
+
+.sidebar-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    transform: translateX(4px);
+}
+
+.sidebar-item.active {
+    background: rgba(168, 85, 247, 0.2);
+    color: white;
+    border-right: 2px solid rgb(168, 85, 247);
+}
+
+.sidebar-icon {
+    width: 1.5rem;
+    height: 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    flex-shrink: 0;
+}
+
+.sidebar-text {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Separators */
+.sidebar-separator {
+    padding: 1rem 1rem 0.5rem;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 500;
+}
+
+/* Badges and Locks */
+.sidebar-badge {
+    position: absolute;
+    right: 2rem;
+    padding: 2px 6px;
+    background: rgba(239, 68, 68, 0.2);
+    color: rgb(252, 165, 165);
+    border-radius: 9999px;
+    font-size: 0.625rem;
+}
+
+.sidebar-lock {
+    position: absolute;
+    right: 0.75rem;
+    opacity: 0.5;
+}
+
+.sidebar-item.locked {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.sidebar-item.locked:hover {
+    background: rgba(255, 255, 255, 0.05);
+    transform: none;
+}
+
+/* Bottom Section */
+.sidebar-bottom {
+    margin-top: auto;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0.5rem;
+}
+
+/* Collapsed State */
+.sidebar.collapsed {
+    width: var(--sidebar-collapsed-width);
+    min-width: var(--sidebar-collapsed-width);
+}
+
+.sidebar.collapsed .sidebar-text,
+.sidebar.collapsed .sidebar-badge,
+.sidebar.collapsed .sidebar-separator {
+    display: none;
+}
+
+.sidebar.collapsed .sidebar-item {
+    justify-content: center;
+    padding: 0.625rem;
+}
+
+.sidebar.collapsed .sidebar-icon {
+    margin: 0;
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+    .sidebar {
+        transform: translateX(-100%);
+    }
+
+    .sidebar.mobile-open {
+        transform: translateX(0);
+    }
+
+    .main-content {
+        margin-left: 0;
+    }
+}
+
+/* Scrollbar */
+.sidebar::-webkit-scrollbar {
+    width: 4px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+}
+
+/* Glass Effect */
+.glass {
+    background: rgba(17, 24, 39, 0.7);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}

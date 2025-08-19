@@ -1,0 +1,50 @@
+{
+  "rishavdarsh": {
+    "employee_id": "rishavdarsh",
+    "name": "Rishav Darsh",
+    "role": "owner",
+    "password_hash": "$2b$12$9uJRJUTYSnsYwSOa1TNrauxDDBfF./CdBxsOOnvKopJGYQMOwKaby"
+  },
+  "EMP001": {
+    "employee_id": "EMP001",
+    "name": "Ritik",
+    "role": "admin",
+    "password_hash": "$2b$12$EO7XgNweOwdXahDQPmVezuxnkcMvnGEeGj/y9uXf.iycEfk8x0eaC"
+  },
+  "EMP002": {
+    "employee_id": "EMP002",
+    "name": "Sunny",
+    "role": "admin",
+    "password_hash": "$2b$12$IyudRvTwSnHTV28XSN/QCefYz/p9biYJAmcE6csBG7QAPuHa/qAp2"
+  },
+  "EMP003": {
+    "employee_id": "EMP003",
+    "name": "Rahul",
+    "role": "manager",
+    "password_hash": "$2b$12$f2mNR0lv9MGujKzweyplt.28WqadmUfskmLC4EwqPStuZdmbfd9HC"
+  },
+  "EMP004": {
+    "employee_id": "EMP004",
+    "name": "Sumit",
+    "role": "packer",
+    "password_hash": "$2b$12$MSVO5swr8ysemomOw4122eqqG10ZYJAoftIfjwnHKN.QEcTRE/kma"
+  },
+  "EMP005": {
+    "employee_id": "EMP005",
+    "name": "Vishal",
+    "role": "manager",
+    "password_hash": "$2b$12$0I9CrPGFn.dnHAQBfCKFIOIn1b8HlJc9BsXM.A5bt6DIVOYJ4n5vG"
+  },
+  "EMP006": {
+    "employee_id": "EMP006",
+    "name": "Nishant",
+    "role": "packer",
+    "password_hash": "$2b$12$RFxvoYwKVrsV46Nwt5woteV/MclCReWgk/4z9puqtHv1ZlgIxsaRO"
+  },
+  "EMP007": {
+    "employee_id": "EMP007",
+    "name": "ayushi",
+    "role": "packer",
+    "password_hash": "$2b$12$NkvwwfejfBAyv71zkPoHt.64lyg2YGhnM5pyQEnxE5fOwgToPOSQ6"
+  }
+}

@@ -30,6 +30,8 @@ templates = Jinja2Templates(directory="templates")
 
 router = APIRouter()
 
+# Note: NAV_ITEMS will be set by app.py when it imports this router
+
 
 # ---- Utilities: auth integration ----
 def current_user(request: Request, db: Session = Depends(get_db)) -> User:

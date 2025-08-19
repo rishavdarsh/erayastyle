@@ -1,0 +1,410 @@
+{% extends "layout_base.html" %}
+{% block content %}
+
+<section class="glass p-6">
+  <h1 class="text-3xl font-bold">User Management</h1>
+  <p class="text-white/80 mt-2">Manage user accounts, roles, and permissions.</p>
+  
+  <div class="mt-6 grid gap-6">
+    <!-- Add User Form -->
+    <div class="glass p-5">
+      <h2 class="text-xl font-semibold mb-4">Add New User</h2>
+      
+      <form id="addUserForm" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium mb-2">Full Name</label>
+          <input type="text" id="userName" placeholder="Enter full name" required
+                 class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white placeholder-white/50">
+        </div>
+        
+        <div>
+          <label class="block text-sm font-medium mb-2">Email</label>
+          <input type="email" id="userEmail" placeholder="user@example.com" required
+                 class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white placeholder-white/50">
+        </div>
+        
+        <div>
+          <label class="block text-sm font-medium mb-2">Role</label>
+          <select id="userRole" required
+                  class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white">
+            <option value="">Select a role</option>
+            <option value="owner">Owner</option>
+            <option value="admin">Admin</option>
+            <option value="manager">Manager</option>
+            <option value="employee">Employee</option>
+            <option value="packer">Packer</option>
+          </select>
+        </div>
+        
+        <div>
+          <label class="block text-sm font-medium mb-2">Password</label>
+          <input type="password" id="userPassword" placeholder="Enter password" required
+                 class="w-full rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white placeholder-white/50">
+        </div>
+        
+        <div class="md:col-span-2">
+          <button type="submit" class="btn btn-primary">Add User</button>
+        </div>
+      </form>
+    </div>
+    
+    <!-- Users List -->
+    <div class="glass p-5">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-semibold">Users</h2>
+        <button id="refreshUsers" class="btn btn-secondary">🔄 Refresh</button>
+      </div>
+      
+      <!-- Search and Filter -->
+      <div class="flex gap-3 mb-4">
+        <input id="searchUsers" placeholder="Search users..." 
+               class="flex-1 rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white placeholder-white/50">
+        <select id="filterRole" 
+                class="rounded-xl bg-slate-900/60 border border-white/10 px-3 py-2 text-white">
+          <option value="">All Roles</option>
+          <option value="owner">Owner</option>
+          <option value="admin">Admin</option>
+          <option value="manager">Manager</option>
+          <option value="employee">Employee</option>
+          <option value="packer">Packer</option>
+        </select>
+      </div>
+      
+      <!-- Users Table -->
+      <div class="overflow-auto">
+        <table class="min-w-full text-sm" id="usersTable">
+          <thead class="bg-slate-900/80">
+            <tr>
+              <th class="text-left p-3 border-b border-white/10">Name</th>
+              <th class="text-left p-3 border-b border-white/10">Email</th>
+              <th class="text-left p-3 border-b border-white/10">Role</th>
+              <th class="text-left p-3 border-b border-white/10">Status</th>
+              <th class="text-left p-3 border-b border-white/10">Last Login</th>
+              <th class="text-left p-3 border-b border-white/10">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="usersTableBody">
+            <!-- Users will be loaded here -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- User Statistics -->
+    <div class="glass p-5">
+      <h2 class="text-xl font-semibold mb-4">User Statistics</h2>
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="bg-slate-800/50 p-4 rounded-lg text-center">
+          <div class="text-2xl font-bold text-blue-400" id="totalUsers">0</div>
+          <div class="text-sm text-white/60">Total Users</div>
+        </div>
+        <div class="bg-slate-800/50 p-4 rounded-lg text-center">
+          <div class="text-2xl font-bold text-green-400" id="activeUsers">0</div>
+          <div class="text-sm text-white/60">Active Users</div>
+        </div>
+        <div class="bg-slate-800/50 p-4 rounded-lg text-center">
+          <div class="text-2xl font-bold text-purple-400" id="adminUsers">0</div>
+          <div class="text-sm text-white/60">Admins</div>
+        </div>
+        <div class="bg-slate-800/50 p-4 rounded-lg text-center">
+          <div class="text-2xl font-bold text-orange-400" id="recentLogins">0</div>
+          <div class="text-sm text-white/60">Recent Logins</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- User Edit Modal -->
+<div id="userModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 hidden items-center justify-center p-4">
+  <div class="bg-slate-900 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+    <div class="flex items-center justify-between mb-4">
+      <h3 id="modalTitle" class="text-xl font-bold">Edit User</h3>
+      <button onclick="closeUserModal()" class="p-2 hover:bg-white/10 rounded-lg transition-colors">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+        </svg>
+      </button>
+    </div>
+    
+    <form id="editUserForm" class="space-y-4">
+      <input type="hidden" id="editUserId">
+      <div>
+        <label class="block text-sm font-medium mb-2">Full Name</label>
+        <input type="text" id="editUserName" required
+               class="w-full rounded-xl bg-slate-800/60 border border-white/10 px-3 py-2 text-white">
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-2">Email</label>
+        <input type="email" id="editUserEmail" required
+               class="w-full rounded-xl bg-slate-800/60 border border-white/10 px-3 py-2 text-white">
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-2">Role</label>
+        <select id="editUserRole" required
+                class="w-full rounded-xl bg-slate-800/60 border border-white/10 px-3 py-2 text-white">
+          <option value="owner">Owner</option>
+          <option value="admin">Admin</option>
+          <option value="manager">Manager</option>
+          <option value="employee">Employee</option>
+          <option value="packer">Packer</option>
+        </select>
+      </div>
+      <div class="flex gap-3">
+        <button type="submit" class="btn btn-primary flex-1">Save Changes</button>
+        <button type="button" onclick="closeUserModal()" class="btn btn-secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<style>
+  .role-owner { background: #7c3aed; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+  .role-admin { background: #dc2626; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+  .role-manager { background: #2563eb; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+  .role-employee { background: #16a34a; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+  .role-packer { background: #ea580c; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+  
+  .status-active { background: #10b981; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+  .status-inactive { background: #6b7280; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+</style>
+
+<script>
+// User management functionality
+var users = [];
+var filteredUsers = [];
+
+// DOM elements
+var addUserForm = document.getElementById('addUserForm');
+var editUserForm = document.getElementById('editUserForm');
+var userModal = document.getElementById('userModal');
+var usersTableBody = document.getElementById('usersTableBody');
+var searchUsers = document.getElementById('searchUsers');
+var filterRole = document.getElementById('filterRole');
+var refreshBtn = document.getElementById('refreshUsers');
+
+// Stats elements
+var totalUsers = document.getElementById('totalUsers');
+var activeUsers = document.getElementById('activeUsers');
+var adminUsers = document.getElementById('adminUsers');
+var recentLogins = document.getElementById('recentLogins');
+
+function loadUsers() {
+  fetch('/api/users')
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      users = data.users;
+      filterUsers();
+      updateStats();
+    } else {
+      showNotification('Failed to load users: ' + data.error, 'error');
+    }
+  })
+  .catch(error => {
+    showNotification('Error loading users: ' + error.message, 'error');
+  });
+}
+
+function filterUsers() {
+  var search = searchUsers.value.toLowerCase();
+  var role = filterRole.value;
+  
+  filteredUsers = users.filter(function(user) {
+    var matchSearch = !search || 
+      user.name.toLowerCase().includes(search) || 
+      user.email.toLowerCase().includes(search);
+    var matchRole = !role || user.role === role;
+    return matchSearch && matchRole;
+  });
+  
+  renderUsersTable();
+}
+
+function renderUsersTable() {
+  var html = '';
+  
+  filteredUsers.forEach(function(user) {
+    var lastLogin = user.last_login ? new Date(user.last_login).toLocaleDateString() : 'Never';
+    var status = user.active ? 'active' : 'inactive';
+    
+    html += `
+      <tr class="hover:bg-white/5">
+        <td class="p-3 border-t border-white/10">${user.name}</td>
+        <td class="p-3 border-t border-white/10">${user.email}</td>
+        <td class="p-3 border-t border-white/10"><span class="role-${user.role}">${user.role}</span></td>
+        <td class="p-3 border-t border-white/10"><span class="status-${status}">${status}</span></td>
+        <td class="p-3 border-t border-white/10">${lastLogin}</td>
+        <td class="p-3 border-t border-white/10">
+          <div class="flex gap-2">
+            <button onclick="editUser(${user.id})" class="btn btn-sm btn-secondary">Edit</button>
+            <button onclick="deleteUser(${user.id})" class="btn btn-sm btn-danger">Delete</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  });
+  
+  usersTableBody.innerHTML = html;
+}
+
+function updateStats() {
+  totalUsers.textContent = users.length;
+  activeUsers.textContent = users.filter(u => u.active).length;
+  adminUsers.textContent = users.filter(u => ['owner', 'admin'].includes(u.role)).length;
+  
+  var recentDate = new Date();
+  recentDate.setDate(recentDate.getDate() - 7);
+  recentLogins.textContent = users.filter(u => 
+    u.last_login && new Date(u.last_login) > recentDate
+  ).length;
+}
+
+function addUser(event) {
+  event.preventDefault();
+  
+  var userData = {
+    name: document.getElementById('userName').value,
+    email: document.getElementById('userEmail').value,
+    role: document.getElementById('userRole').value,
+    password: document.getElementById('userPassword').value
+  };
+  
+  fetch('/api/users', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(userData)
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      showNotification('User added successfully!', 'success');
+      addUserForm.reset();
+      loadUsers();
+    } else {
+      showNotification('Failed to add user: ' + data.error, 'error');
+    }
+  })
+  .catch(error => {
+    showNotification('Error adding user: ' + error.message, 'error');
+  });
+}
+
+function editUser(userId) {
+  var user = users.find(u => u.id === userId);
+  if (!user) return;
+  
+  document.getElementById('editUserId').value = user.id;
+  document.getElementById('editUserName').value = user.name;
+  document.getElementById('editUserEmail').value = user.email;
+  document.getElementById('editUserRole').value = user.role;
+  
+  userModal.classList.remove('hidden');
+  userModal.classList.add('flex');
+}
+
+function closeUserModal() {
+  userModal.classList.add('hidden');
+  userModal.classList.remove('flex');
+}
+
+function updateUser(event) {
+  event.preventDefault();
+  
+  var userId = document.getElementById('editUserId').value;
+  var userData = {
+    name: document.getElementById('editUserName').value,
+    email: document.getElementById('editUserEmail').value,
+    role: document.getElementById('editUserRole').value
+  };
+  
+  fetch(`/api/users/${userId}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(userData)
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      showNotification('User updated successfully!', 'success');
+      closeUserModal();
+      loadUsers();
+    } else {
+      showNotification('Failed to update user: ' + data.error, 'error');
+    }
+  })
+  .catch(error => {
+    showNotification('Error updating user: ' + error.message, 'error');
+  });
+}
+
+function deleteUser(userId) {
+  if (!confirm('Are you sure you want to delete this user?')) return;
+  
+  fetch(`/api/users/${userId}`, {
+    method: 'DELETE'
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      showNotification('User deleted successfully!', 'success');
+      loadUsers();
+    } else {
+      showNotification('Failed to delete user: ' + data.error, 'error');
+    }
+  })
+  .catch(error => {
+    showNotification('Error deleting user: ' + error.message, 'error');
+  });
+}
+
+function showNotification(message, type = 'info') {
+  var notification = document.createElement('div');
+  notification.className = `fixed top-4 right-4 z-50 p-4 rounded-xl border max-w-md shadow-lg transition-all duration-300 transform translate-x-full`;
+  
+  if (type === 'success') {
+    notification.className += ' bg-green-500/20 border-green-500/30 text-green-200';
+  } else if (type === 'error') {
+    notification.className += ' bg-red-500/20 border-red-500/30 text-red-200';
+  } else {
+    notification.className += ' bg-blue-500/20 border-blue-500/30 text-blue-200';
+  }
+  
+  notification.innerHTML = `
+    <div class="flex items-center gap-3">
+      <div class="text-xl">${type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️'}</div>
+      <div class="flex-1">${message}</div>
+      <button onclick="this.parentElement.parentElement.remove()" class="text-white/70 hover:text-white">✕</button>
+    </div>
+  `;
+  
+  document.body.appendChild(notification);
+  
+  setTimeout(() => {
+    notification.classList.remove('translate-x-full');
+  }, 100);
+  
+  setTimeout(() => {
+    notification.classList.add('translate-x-full');
+    setTimeout(() => notification.remove(), 300);
+  }, 5000);
+}
+
+// Event listeners
+addUserForm.addEventListener('submit', addUser);
+editUserForm.addEventListener('submit', updateUser);
+searchUsers.addEventListener('input', filterUsers);
+filterRole.addEventListener('change', filterUsers);
+refreshBtn.addEventListener('click', loadUsers);
+
+// Load users on page load
+document.addEventListener('DOMContentLoaded', function() {
+  loadUsers();
+});
+</script>
+
+{% endblock %}

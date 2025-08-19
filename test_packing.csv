@@ -1,0 +1,6 @@
+Order Number,Product Name,Variant,Color,Main Photo Link,Polaroid Link(s),Back Engraving Type,Back Engraving
+ER1059904,Couple Personalized Ring,Gold,Gold,https://example.com/photo1.jpg,https://example.com/polaroid1.jpg;https://example.com/polaroid2.jpg,Text,Forever Love
+ER1059905,Personalized Necklace,Silver,Silver,https://example.com/photo2.jpg,https://example.com/polaroid3.jpg,Initials,JM
+ER1059906,Custom Bracelet,Rose Gold,Rose Gold,https://example.com/photo3.jpg,https://example.com/polaroid4.jpg;https://example.com/polaroid5.jpg;https://example.com/polaroid6.jpg,Date,12.25.2024
+ER1059907,Engraved Ring,Platinum,Platinum,https://example.com/photo4.jpg,https://example.com/polaroid7.jpg,Quote,Carpe Diem
+ER1059908,Personalized Pendant,White Gold,White Gold,https://example.com/photo5.jpg,https://example.com/polaroid8.jpg;https://example.com/polaroid9.jpg,Name,Alex

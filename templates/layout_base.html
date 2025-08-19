@@ -3,11 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ title or 'Task Management' }} — Lumen Orders</title>
+  <title>{{ title or 'Task Management' }} — Eraya Style</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/js/nav.js" defer></script>
   <style>
     :root { 
       --brand: #a78bfa; 
@@ -302,34 +304,27 @@
         <div class="w-10 h-10 rounded-xl" style="background:linear-gradient(135deg,var(--brand),var(--accent))"></div>
         <div>
           <h1 class="text-xl font-semibold tracking-wide">{{ header or 'Task Management' }}</h1>
-          <p class="text-sm text-white/60">Lumen Orders</p>
+          <p class="text-sm text-white/60">Eraya Style</p>
         </div>
       </div>
       
       <nav class="flex items-center gap-2">
-        <a href="/task" class="nav-item {{ 'active' if request.url.path == '/task' else '' }}">
-          📊 Dashboard
-        </a>
-        <a href="/team" class="nav-item {{ 'active' if request.url.path == '/team' else '' }}">
-          👥 Team
-        </a>
-        {% if user and user.role in ['ADMIN', 'MANAGER'] %}
-        <a href="/admin/tasks" class="nav-item {{ 'active' if request.url.path == '/admin/tasks' else '' }}">
-          ⚙️ Admin
-        </a>
-        {% endif %}
-        
         <!-- Dark Mode Toggle -->
         <button onclick="toggleDarkMode()" class="nav-item p-2" title="Toggle Dark Mode" id="darkModeToggle">
           <span id="darkModeIcon">🌙</span>
         </button>
-    </nav>
+      </nav>
     </div>
   </header>
 
+  <!-- Include Sidebar -->
+  {% include "partials/sidebar.html" %}
+
   <!-- Main Content -->
-  <main class="mx-auto max-w-7xl px-4 py-6">
-    {% block content %}{% endblock %}
+  <main class="main-content">
+    <div class="mx-auto max-w-7xl">
+      {% block content %}{% endblock %}
+    </div>
   </main>
 
   <!-- Task Detail Modal -->
